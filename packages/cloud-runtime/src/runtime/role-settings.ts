@@ -64,11 +64,21 @@ function changeRoleTargets(
   );
   if (expected.size !== targets.length) throw new Error('role_invalid');
 
+  const seenSources = new Set<string>();
+  const visibleDestinations = new Set<string>();
   const replace = (target: unknown) => {
     if (!record(target) || typeof target.machineId !== 'string') return target;
-    const change = changesByMachine.get(target.machineId);
+    const machineId = target.machineId;
+    if (seenSources.has(machineId)) {
+      // The reader keeps the first binding per machine. A hidden binding
+      // must not become that first binding after a move.
+      if (!visibleDestinations.has(machineId)) throw new Error('role_invalid');
+      return target;
+    }
+    seenSources.add(machineId);
+    const change = changesByMachine.get(machineId);
+    visibleDestinations.add(change?.machineId ?? machineId);
     if (!change) return target;
-    changesByMachine.delete(target.machineId);
     const memory = record(target.runConfig)
       ? target.runConfig.memory
       : undefined;
@@ -87,7 +97,6 @@ function changeRoleTargets(
     if (Array.isArray(value.additionalTargets))
       value.additionalTargets = value.additionalTargets.map(replace);
   }
-  // A legacy duplicate must never become an extra visible target after a move.
   const updated = readRole(value, value.id)?.targets;
   if (
     updated?.length !== expected.size ||

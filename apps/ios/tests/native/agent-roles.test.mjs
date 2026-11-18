@@ -57,11 +57,11 @@ const row = (id, patch = {}) => ({
   updatedAt: 1,
   ...patch,
 });
-function catalog() {
+function catalog(machineIds = ['m1', 'm2']) {
   const remote = new Flock(`role-${crypto.randomUUID()}`),
     meta = new Flock('meta');
   const machines = new Map(
-    ['m1', 'm2'].map((machineId, i) => {
+    machineIds.map((machineId, i) => {
       const flock = new Flock(machineId);
       flock.set(['agentConfig', `a${i + 1}`], {
         id: `a${i + 1}`,
@@ -403,6 +403,44 @@ test('switches in v2 and legacy additional targets preserve the other binding', 
       runConfig: {},
     });
     assert.equal(c.writes(), 1);
+  }
+});
+
+test('moving two bindings rejects a hidden binding even when its agent matches the destination', async () => {
+  for (const v of [1, 2]) {
+    const c = catalog(['m1', 'm2', 'm3']);
+    const first = { machineId: 'm1', agentConfigId: 'a1' };
+    const hidden = { ...first, alias: 'Old', runConfig: { modelId: 'old' } };
+    const second = {
+      machineId: 'm2',
+      agentConfigId: 'a2',
+      alias: 'Current',
+      runConfig: { memory: { providerId: 'p', memoryId: 'mem' } },
+    };
+    c.put(
+      'multi',
+      v === 1
+        ? { ...first, additionalTargets: [hidden, second] }
+        : { v, targets: [first, hidden, second] },
+    );
+    const [base] = (await c.list()).roles;
+    assert.equal(base.targets.length, 2);
+    const stored = c.remote.get(['agentRole', base.id]);
+    await assert.rejects(
+      c.call({
+        action: 'save',
+        id: base.id,
+        base,
+        fields: fields(base.name),
+        targetChanges: [
+          { fromMachineId: 'm1', machineId: 'm3', agentConfigId: 'a3' },
+          { fromMachineId: 'm2', machineId: 'm1', agentConfigId: 'a1' },
+        ],
+      }),
+      /role_invalid/,
+    );
+    assert.equal(c.writes(), 0);
+    assert.deepEqual(c.remote.get(['agentRole', base.id]), stored);
   }
 });
 
