@@ -1522,6 +1522,29 @@ extension RuntimeContract {
     }
   }
 
+  public struct AgentRolesParamsSaveTargetChangesItem: Codable, Sendable, Equatable {
+    public var fromMachineId: String
+    public var machineId: String
+    public var agentConfigId: String
+    public init(fromMachineId: String, machineId: String, agentConfigId: String) {
+      self.fromMachineId = fromMachineId
+      self.machineId = machineId
+      self.agentConfigId = agentConfigId
+    }
+    public init(from decoder: any Decoder) throws {
+      let c = try decoder.container(keyedBy: Key.self)
+      self.fromMachineId = try c.decode(String.self, forKey: Key("fromMachineId"))
+      self.machineId = try c.decode(String.self, forKey: Key("machineId"))
+      self.agentConfigId = try c.decode(String.self, forKey: Key("agentConfigId"))
+    }
+    public func encode(to encoder: any Encoder) throws {
+      var c = encoder.container(keyedBy: Key.self)
+      try c.encode(self.fromMachineId, forKey: Key("fromMachineId"))
+      try c.encode(self.machineId, forKey: Key("machineId"))
+      try c.encode(self.agentConfigId, forKey: Key("agentConfigId"))
+    }
+  }
+
   public struct AgentRolesParamsSave: Codable, Sendable, Equatable {
     public var workspaceId: String
     public var userId: String
@@ -1529,13 +1552,15 @@ extension RuntimeContract {
     public var base: AgentRoleItem?
     public var fields: AgentRolesParamsSaveFields
     public var target: AgentRolesParamsSaveTarget?
-    public init(workspaceId: String, userId: String, id: String, base: AgentRoleItem?, fields: AgentRolesParamsSaveFields, target: AgentRolesParamsSaveTarget? = nil) {
+    public var targetChanges: [AgentRolesParamsSaveTargetChangesItem]?
+    public init(workspaceId: String, userId: String, id: String, base: AgentRoleItem?, fields: AgentRolesParamsSaveFields, target: AgentRolesParamsSaveTarget? = nil, targetChanges: [AgentRolesParamsSaveTargetChangesItem]? = nil) {
       self.workspaceId = workspaceId
       self.userId = userId
       self.id = id
       self.base = base
       self.fields = fields
       self.target = target
+      self.targetChanges = targetChanges
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
@@ -1545,6 +1570,7 @@ extension RuntimeContract {
       self.base = try c.decode(AgentRoleItem?.self, forKey: Key("base"))
       self.fields = try c.decode(AgentRolesParamsSaveFields.self, forKey: Key("fields"))
       self.target = try c.decodeIfPresent(AgentRolesParamsSaveTarget.self, forKey: Key("target"))
+      self.targetChanges = try c.decodeIfPresent([AgentRolesParamsSaveTargetChangesItem].self, forKey: Key("targetChanges"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
@@ -1554,6 +1580,7 @@ extension RuntimeContract {
       try c.encode(self.base, forKey: Key("base"))
       try c.encode(self.fields, forKey: Key("fields"))
       try c.encodeIfPresent(self.target, forKey: Key("target"))
+      try c.encodeIfPresent(self.targetChanges, forKey: Key("targetChanges"))
     }
   }
 

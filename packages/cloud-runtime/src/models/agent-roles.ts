@@ -44,6 +44,11 @@ export type AgentRoleRequest = { workspaceId: string } & (
       base: AgentRoleItem | null;
       fields: RoleFields;
       target?: { machineId: string; agentConfigId: string };
+      targetChanges?: {
+        fromMachineId: string;
+        machineId: string;
+        agentConfigId: string;
+      }[];
     }
   | { action: 'delete'; base: AgentRoleItem }
 );

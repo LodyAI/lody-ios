@@ -4,10 +4,12 @@ import LodyCore
 typealias AgentRole = RuntimeContract.AgentRoleItem
 typealias AgentRoleAgent = RuntimeContract.AgentRoleSnapshotAgentsItem
 typealias AgentRoleSnapshot = RuntimeContract.AgentRoleSnapshot
+typealias AgentRoleTarget = RuntimeContract.AgentRoleItemTargetsItem
 
 enum AgentRoleRequest: Sendable {
   case list
-  case save(id: String, base: AgentRole?, fields: RuntimeContract.AgentRolesParamsSaveFields, target: RuntimeContract.AgentRolesParamsSaveTarget?)
+  case save(id: String, base: AgentRole?, fields: RuntimeContract.AgentRolesParamsSaveFields, target: RuntimeContract.AgentRolesParamsSaveTarget?,
+            targetChanges: [RuntimeContract.AgentRolesParamsSaveTargetChangesItem]?)
   case delete(AgentRole)
 }
 

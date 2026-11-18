@@ -19572,13 +19572,30 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "新角色使用 Agent 默认配置。已有目标、模型、运行选项和记忆关联会保留，编辑这些配置请使用电脑端。"
+            "value": "新角色使用所选 Agent 的默认模型和运行选项。"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "New roles use Agent defaults. Existing targets, models, run options and memory are preserved. Edit these on your computer."
+            "value": "New roles use the selected agent’s default model and run options."
+          }
+        }
+      }
+    },
+    "settings.roles.switchAgentHint": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切换 Agent 后将使用新 Agent 的默认模型和运行选项。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switching agents uses the new agent’s default model and run options."
           }
         }
       }

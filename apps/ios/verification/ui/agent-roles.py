@@ -1,4 +1,4 @@
-"""Role management: access recovery, ownership, retained drafts, create/readback and uncertain deletion."""
+"""Role management: access recovery, ownership, switching agents, create/readback and uncertain deletion."""
 import json,sys
 from driver import UI
 from settings_states import pull,try_again,unavailable,no_header_refresh
@@ -27,6 +27,10 @@ def name(value):
     ui.axe('type',value)
     ui.wait(lambda items:any(item.get('AXUniqueId')=='role-name' and item.get('AXValue')==value for item in items),'Name input did not commit')
 def failure(key):ui.wait(lambda items:any(item.get('AXUniqueId')=='role-error' and catalog.text(key) in spoken(item) for item in items),'Missing '+key)
+def binding(index, machine, agent):
+    identifier = f'role-bound-agent-{index}'
+    ui.wait(lambda items: any(item.get('AXUniqueId') == identifier and machine in spoken(item) and agent in spoken(item)
+                              for item in items), f'Expected {agent} on {machine}')
 def scroll_to(identifier):
     for _ in range(4):
         items=ui.state();node=next((item for item in items if item.get('AXUniqueId')==identifier),None)
@@ -41,8 +45,9 @@ ui.capture('roles-list')
 tap('role:search');ui.element('role-name')
 assert not any(item.get('AXLabel')==catalog.text('common.save') for item in ui.state()),'Non-owner can save'
 assert not any(item.get('AXUniqueId')=='role-delete' for item in ui.state()),'Non-owner can delete'
+assert not any((item.get('AXUniqueId') or '').startswith('role-bound-agent-') for item in ui.state()), 'Non-owner can switch agents'
 ui.capture('roles-readonly');toolbar('common.cancel')
-tap('role:multi');assert 'Laptop' in spoken(ui.element('role-targets'));assert 'Studio' in spoken(ui.element('role-targets'))
+tap('role:multi');binding(0, 'Studio', 'Coder');binding(1, 'Laptop', 'Coder')
 ui.capture('roles-multiple-targets');toolbar('common.cancel')
 tap('role:review');name('Search');toolbar('common.save');failure('settings.roles.duplicate');reveal_name();ui.capture('roles-duplicate')
 name('Mobile');toolbar('common.save');failure('settings.remote.conflict')
@@ -50,6 +55,16 @@ assert ui.element('role-name')['AXValue']=='Mobile';reveal_name();ui.capture('ro
 tap('role:review');tap('role-shared');ui.wait(lambda items:any(item.get('AXUniqueId')=='role-shared' and item.get('AXValue')=='1' for item in items),'Sharing toggle did not change');name('Mobile');toolbar('common.save')
 ui.wait(lambda items:any(item.get('AXUniqueId')=='role:review' and 'Mobile' in spoken(item) for item in items),'Edit was not read back')
 assert catalog.text('settings.roles.sharedValue') in spoken(ui.element('role:review'));tap('role:review');assert ui.element('role-name')['AXValue']=='Mobile';reveal_name();ui.capture('roles-edit-readback');toolbar('common.cancel')
+
+tap('role:review');binding(0, 'Studio', 'Coder');tap('role-bound-agent-0')
+assert 'Researcher' in spoken(ui.element('role-agent-choice-1'))
+assert 'Laptop' in spoken(ui.element('role-agent-choice-2'))
+ui.capture('roles-agent-picker');tap('role-agent-choice-1');binding(0, 'Studio', 'Researcher')
+toolbar('common.cancel');tap('role:review');binding(0, 'Studio', 'Coder')
+tap('role-bound-agent-0');tap('role-agent-choice-2');binding(0, 'Laptop', 'Reviewer')
+toolbar('common.save');ui.element('role:review');tap('role:review');binding(0, 'Laptop', 'Reviewer')
+ui.capture('roles-agent-switch-readback');toolbar('common.cancel')
+
 toolbar('settings.roles.add');ui.element('role-name');assert ui.element('role-shared')['AXValue']=='0'
 assert not next(item for item in ui.state() if item.get('AXLabel')==catalog.text('common.save'))['enabled']
 reveal_name();ui.capture('roles-empty-create');tap('role-machine');ui.element('m2');tap('m2');ui.wait(lambda items:any(item.get('AXUniqueId')=='role-machine' and 'Laptop' in spoken(item) for item in items),'Selected computer did not return to editor');assert 'Reviewer' in spoken(ui.element('role-target'));name('Helper');toolbar('common.save')
@@ -67,4 +82,4 @@ assert not any(item.get('AXUniqueId')=='role-name' for item in ui.state()),'Old 
 ui.capture('roles-account-switched')
 ui.open_case('settings-baseline-live');ui.element('agent-roles');ui.capture('roles-settings-entry');tap('agent-roles');ui.element('list-unavailable-action');ui.capture('roles-entry-offline')
 ui.open_case('settings-baseline-live');ui.element('agent-roles');ui.capture('roles-entry-return')
-print(json.dumps({'accessRecovered':True,'ownerOnly':True,'multiTargets':True,'draftRetained':True,'privateCreate':True,'readback':True,'uncertainDeleteNeverReplayed':True,'accountSwitchClosesEditor':True}))
+print(json.dumps({'accessRecovered':True,'ownerOnly':True,'multiTargets':True,'agentSwitchReadback':True,'draftRetained':True,'privateCreate':True,'readback':True,'uncertainDeleteNeverReplayed':True,'accountSwitchClosesEditor':True}))

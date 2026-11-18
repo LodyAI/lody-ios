@@ -1,5 +1,5 @@
 // LodyAI/Lody a15cdae: agent-role.ts v1 inline / v2 targets wire shapes.
-// Keep the stored row intact: mobile edits shared metadata, not run configuration.
+// Keep both stored shapes readable, including targets written by other clients.
 type RecordValue = Record<string, unknown>;
 export const record = (value: unknown): value is RecordValue =>
   !!value && typeof value === 'object' && !Array.isArray(value);

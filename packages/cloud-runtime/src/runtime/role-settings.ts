@@ -4,6 +4,7 @@ import type {
   AgentRoleRequest,
   AgentRoleSnapshot,
   RoleAgent,
+  RoleTarget,
 } from '../models/agent-roles';
 import {
   DEFAULT_ROLE_EMOJI,
@@ -18,6 +19,85 @@ import { encodeFrame } from '../frames';
 import { openSettings } from './settings';
 import { creationOptions } from './create-session';
 import { clientFor } from './session';
+
+type TargetChange = NonNullable<
+  Extract<AgentRoleRequest, { action: 'save' }>['targetChanges']
+>[number];
+
+function changeRoleTargets(
+  value: Record<string, unknown>,
+  targets: RoleTarget[],
+  changes: TargetChange[],
+  agents: RoleAgent[],
+) {
+  const changesByMachine = new Map<string, TargetChange>();
+  const sources = new Set<string>();
+  for (const change of changes) {
+    const original = targets.find(
+      (target) => target.machineId === change.fromMachineId,
+    );
+    if (!original || sources.has(change.fromMachineId))
+      throw new Error('role_invalid');
+    sources.add(change.fromMachineId);
+    if (
+      original.machineId === change.machineId &&
+      original.agentConfigId === change.agentConfigId
+    )
+      continue;
+    if (
+      !agents.some(
+        (agent) =>
+          agent.machineId === change.machineId &&
+          agent.id === change.agentConfigId,
+      )
+    )
+      throw new Error('role_target_unavailable');
+    changesByMachine.set(change.fromMachineId, change);
+  }
+  if (!changesByMachine.size) return false;
+
+  const expected = new Map(
+    targets.map((target) => {
+      const destination = changesByMachine.get(target.machineId) ?? target;
+      return [destination.machineId, destination.agentConfigId];
+    }),
+  );
+  if (expected.size !== targets.length) throw new Error('role_invalid');
+
+  const replace = (target: unknown) => {
+    if (!record(target) || typeof target.machineId !== 'string') return target;
+    const change = changesByMachine.get(target.machineId);
+    if (!change) return target;
+    changesByMachine.delete(target.machineId);
+    const memory = record(target.runConfig)
+      ? target.runConfig.memory
+      : undefined;
+    return {
+      ...target,
+      machineId: change.machineId,
+      agentConfigId: change.agentConfigId,
+      runConfig: memory === undefined ? {} : { memory },
+    };
+  };
+
+  if (value.v === 2 && Array.isArray(value.targets)) {
+    value.targets = value.targets.map(replace);
+  } else {
+    Object.assign(value, replace(value));
+    if (Array.isArray(value.additionalTargets))
+      value.additionalTargets = value.additionalTargets.map(replace);
+  }
+  // A legacy duplicate must never become an extra visible target after a move.
+  const updated = readRole(value, value.id)?.targets;
+  if (
+    updated?.length !== expected.size ||
+    updated.some(
+      (target) => expected.get(target.machineId) !== target.agentConfigId,
+    )
+  )
+    throw new Error('role_invalid');
+  return true;
+}
 
 export function roleSnapshot(
   flock: Flock,
@@ -188,9 +268,17 @@ export async function roleSettings(
     )
       throw new Error('role_duplicate');
     let value: Record<string, unknown>;
-    if (base && record(raw)) value = { ...raw };
-    else {
-      // shortcut: Mobile creates one target with Agent defaults; richer target/run editing stays on desktop.
+    let switched = false;
+    if (current && record(raw)) {
+      value = { ...raw };
+      switched = changeRoleTargets(
+        value,
+        current.targets,
+        request.targetChanges ?? [],
+        before.agents,
+      );
+    } else {
+      if (request.targetChanges?.length) throw new Error('role_invalid');
       const agent = before.agents.find(
         (agent) =>
           agent.id === request.target?.agentConfigId &&
@@ -213,6 +301,7 @@ export async function roleSettings(
       emoji = fields.emoji === undefined ? undefined : roleEmoji(fields.emoji);
     if (
       current &&
+      !switched &&
       current.name === name &&
       current.description === description &&
       current.promptPrefix === promptPrefix &&
