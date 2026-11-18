@@ -235,3 +235,20 @@ pending or failed; a machine with no projection contributes no projects.
 `syncError` describes metadata unavailability, while machine failures emit
 `diagnostic` with `sync_error:<reason>` and clear only that target's readiness.
 Creation and other machine operations retain their target readiness checks.
+
+Catalogs and cached settings compare a newer snapshot offset with the retained
+cursor using exact decimal byte arithmetic. After the first backlog response,
+catalogs check HEAD once per catch-up window; cached settings check before their
+read. The estimate uses the last downloaded snapshot size: switch only when
+backlog bytes exceed `max(256 KiB, snapshotBytes / 2 + tail - snapshotOffset)`.
+HEAD has a two-second budget and failures retain incremental reads. A proposed
+replacement must be fully caught up and within the existing input budget before
+it replaces the old replica; larger or incomplete candidates keep incremental
+catch-up. This is an estimate, not a guarantee about the newest snapshot size.
+
+Frame imports share a 12 ms cooperative slice across bootstrap parts and yield
+macrotasks between slices, checking cancellation before further imports. Binary
+snapshot imports yield before execution; a single JSON parse or Wasm call cannot
+be preempted. Machine initialization has two slots through first sync; metadata
+and live reads bypass them. A 16 ms publication window coalesces bursts using the
+current scope. Machine catalog and provider projections reuse one Flock scan.

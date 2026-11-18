@@ -771,3 +771,108 @@ test('overlapping starts preserve the old scope until provider cleanup completes
     'workspace_changed',
   );
 });
+
+test('catalog frame import serves heartbeat macrotasks between slices and preserves real Flock updates', async (t) => {
+  const { catalogImportCheckpoint, importCatalogUpdates } =
+    await import('../../../../packages/cloud-runtime/src/runtime/catalog-sync.ts');
+  const { encodeFrame } =
+    await import('../../../../packages/cloud-runtime/src/frames.ts');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0,
+    imported = 0,
+    heartbeatAt;
+  t.mock.method(performance, 'now', () => now);
+  const server = new Flock('catalog-frames');
+  const target = new Flock('catalog-reader');
+  const frames = [];
+  for (let i = 0; i < 10; i++) {
+    const version = server.version();
+    server.set(['m', `session-${i}`], { title: `Session ${i}` }, i + 1);
+    frames.push(
+      encodeFrame(
+        new TextEncoder().encode(JSON.stringify(server.exportJson(version))),
+      ),
+    );
+  }
+  const bytes = new Uint8Array(
+    frames.reduce((sum, frame) => sum + frame.length, 0),
+  );
+  let offset = 0;
+  for (const frame of frames) {
+    bytes.set(frame, offset);
+    offset += frame.length;
+  }
+  const original = target.importJson.bind(target);
+  t.mock.method(target, 'importJson', (json) => {
+    original(json);
+    imported++;
+    now += 4;
+  });
+  setTimeout(() => {
+    heartbeatAt = imported;
+  }, 0);
+  const result = importCatalogUpdates(
+    target,
+    bytes,
+    catalogImportCheckpoint(new AbortController().signal),
+  );
+  const turn = () => new Promise((resolve) => setImmediate(resolve));
+  await turn();
+  assert.equal(imported, 3, 'one slice imports only its 12 ms allowance');
+  t.mock.timers.tick(0);
+  await turn();
+  assert.equal(
+    heartbeatAt,
+    3,
+    'native ping can run before all catalog frames finish',
+  );
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(0);
+    await turn();
+  }
+  await result;
+  for (let i = 0; i < 10; i++)
+    assert.equal(target.get(['m', `session-${i}`]).title, `Session ${i}`);
+});
+
+test('scope cancellation at a catalog import yield stops before the next frame', async (t) => {
+  const { catalogImportCheckpoint, importCatalogUpdates } =
+    await import('../../../../packages/cloud-runtime/src/runtime/catalog-sync.ts');
+  const { encodeFrame } =
+    await import('../../../../packages/cloud-runtime/src/frames.ts');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const server = new Flock('cancel-server'),
+    target = new Flock('cancel-reader');
+  server.set(['m', 'session-one'], { title: 'One' }, 1);
+  const first = encodeFrame(
+    new TextEncoder().encode(JSON.stringify(server.exportJson())),
+  );
+  const version = server.version();
+  server.set(['m', 'session-two'], { title: 'Two' }, 2);
+  const second = encodeFrame(
+    new TextEncoder().encode(JSON.stringify(server.exportJson(version))),
+  );
+  const bytes = new Uint8Array(first.length + second.length);
+  bytes.set(first);
+  bytes.set(second, first.length);
+  const controller = new AbortController();
+  const original = target.importJson.bind(target);
+  t.mock.method(target, 'importJson', (json) => {
+    original(json);
+    now += 12;
+  });
+  setTimeout(() => controller.abort(new Error('workspace_changed')), 0);
+  const result = importCatalogUpdates(
+    target,
+    bytes,
+    catalogImportCheckpoint(controller.signal),
+  );
+  const rejected = assert.rejects(result, /workspace_changed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(0);
+  await rejected;
+  assert.equal(target.get(['m', 'session-one']).title, 'One');
+  assert.equal(target.get(['m', 'session-two']), undefined);
+});
