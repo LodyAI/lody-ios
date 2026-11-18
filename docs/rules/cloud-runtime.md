@@ -19,3 +19,7 @@ Read before changing login, the data runtime, the offscreen WebView and watchdog
 - This POC reads catalogs and session history, and sends text turns. CRDT replicas restore from server bootstrap. App account/workspace context and complete catalog display projections restore from SQLite in LodyKit before background authentication and sync; credentials remain in Keychain. Loro/Flock updates use uint32 big-endian length frames; never append raw WASM exports. Persist the user history before the durable dispatch pointer and Machine RPC. A machine ACK is delivery, not completion. Never automatically replay writes across runtime recovery. Catalogs have an explicit 16 MiB per-replica input ceiling; do not label an incomplete or failed sync as live.
 
 - Session envelopes stay below the host's 12 MiB limit. Loro sessions keep the whole document in the runtime but send only a transcript window that starts at a user turn, follows new entries and grows by pages on `loadOlderSession`; usage, billing, execution and composer state still read the whole history. A window over the 8 MiB budget keeps its newest turns and stops offering older history. An envelope still over the limit becomes an overflow marker and records one `session_overflow` diagnostic with its size.
+
+- The trusted DataRuntime HTML permits `https:` and `wss:` connections; its other
+  CSP directives remain restrictive. CSP permission alone does not enable the
+  Streams WebSocket transport.
