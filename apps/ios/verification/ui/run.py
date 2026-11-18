@@ -157,7 +157,6 @@ PREVIEW = {
 READY = {
     'toast': 'session-preview-probe',
     'role-mention-sheet': 'create-session-input',
-    'agent-roles': 'list-unavailable-action',
     'session-native': 'session-preview-probe',
     'proposal-cards': 'session-preview-probe',
     'session-simulator': 'session-preview-probe',
@@ -510,7 +509,11 @@ try:
                 if case not in HOME_CASES:
                     ui.open_case(preview)
                     result['caseEntry'] = 'deep-link'
-                ui.element(ready)
+                if case == 'agent-roles':
+                    ui.wait(lambda items: any(item.get('AXUniqueId') in ('list-unavailable-action', 'list-notice-action') for item in items),
+                            'Missing role list retry action')
+                else:
+                    ui.element(ready)
                 result['caseEntrySeconds'] = round(time.monotonic() - entry_started, 2)
                 if case == 'permission':
                     ui.wait(lambda items: any(i.get('AXLabel') == 'Fixtures' for i in items), 'Missing permission fixture toolbar')
