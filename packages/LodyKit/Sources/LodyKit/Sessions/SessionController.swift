@@ -16,6 +16,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   lazy var composerModel = SessionComposerModel(choice: initialChoice, service: environment.composer)
   lazy var control = SessionControl(request: environment.control)
   var sender: SessionSender?
+  weak var syncDetailsPage: UIHostingController<ConversationSyncDetailsView>?
+  var syncFallbackSince = Date()
   let planDecision = SessionDecision(.plan)
   let errorRetry = SessionDecision(.retry)
   let itemDetailService: ItemDetailService
@@ -305,6 +307,10 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       return
     }
     chat.setTabClosed(false)
+    let unconfirmed = state.status != "live" || state.overflow || state.syncDetails.map { $0.phase != .confirmed } == true
+    if unconfirmed && !chat.syncExecutionUnconfirmed { syncFallbackSince = Date() }
+    chat.syncExecutionUnconfirmed = unconfirmed
+    syncDetailsPage?.rootView = makeSyncDetailsView(state)
     renderComposer(session, state)
     renderPermission()
     chat.setEmptyText(String(localized: String.LocalizationValue(state.status == "live" ? "chat.empty.prompt" : "chat.empty.loading"), bundle: .lody))
@@ -584,6 +590,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   }
 
   private func wireEvents() {
+    chat.overlay.onSyncDetails = { [weak self] in self?.showSyncDetails() }
     chat.onReconnect = { [weak self] _ in self?.feed?.reconnect() }
     chat.onLoadEarlierHistory = { [weak self] in
       guard let self else { return }

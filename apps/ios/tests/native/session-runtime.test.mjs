@@ -195,9 +195,19 @@ test(
       fixture.close();
     });
     assert.equal(fixture.events.at(-1).entries[0].finished, false);
+    const initial = fixture.events.at(-1).syncDetails;
+    assert.equal(initial.document.phase, 'confirmed');
+    assert.equal(initial.history.phase, 'confirmed');
     controlUnavailable = true;
     controlRead.resolve({ ok: false, result: { code: 'network_error' } });
     await controlFailed.promise;
+    const interrupted = fixture.events.at(-1).syncDetails;
+    assert.deepEqual(interrupted.document, {
+      phase: 'retrying',
+      reason: 'network',
+    });
+    assert.equal(interrupted.history.phase, 'confirmed');
+    assert.ok(interrupted.since >= initial.since);
 
     revision = 2;
     (await historyWatch.promise)({
@@ -214,6 +224,8 @@ test(
       await fixture.reopen();
     } while (!fixture.events.at(-1).entries[0]?.finished);
     assert.equal(fixture.events.at(-1).status, 'syncing');
+    assert.equal(fixture.events.at(-1).syncDetails.document.phase, 'retrying');
+    assert.equal(fixture.events.at(-1).syncDetails.since, interrupted.since);
     assert.ok(
       eventsWhileControlUnavailable.every((synced) => synced === false),
     );
@@ -225,6 +237,8 @@ test(
     });
     await liveAfterRecovery.promise;
     assert.equal(fixture.events.at(-1).status, 'live');
+    assert.equal(fixture.events.at(-1).syncDetails.document.phase, 'confirmed');
+    assert.equal(fixture.events.at(-1).syncDetails.history.phase, 'confirmed');
   },
 );
 
@@ -1681,7 +1695,9 @@ for (const invalidPatch of [false, true]) {
       });
       try {
         await watching;
-        const updated = fixture.nextEmit();
+        const updated = fixture.nextEmit(
+          (snapshot) => snapshot.entries[0]?.items[0]?.text === 'ACB',
+        );
         resolveWatch({
           type: 'session/history-read_response',
           sessionId: 's1',
@@ -1718,6 +1734,7 @@ for (const invalidPatch of [false, true]) {
         });
         const event = await updated;
         assert.equal(event.entries[0].items[0].text, 'ACB');
+        assert.equal(event.syncDetails.history.phase, 'confirmed');
         assert.equal(
           reads.find((query) => query.kind === 'watchChanges').withPatches,
           true,

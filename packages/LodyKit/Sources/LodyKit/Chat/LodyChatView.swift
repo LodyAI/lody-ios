@@ -88,6 +88,9 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   var onPullRequestLink: (ChatPullRequestLink) -> Bool = { _ in false }
   var onTurnChangesPress: ([String: Any]) -> Void = { _ in }
   var onReconnect: ([String: Any]) -> Void = { _ in }
+  var syncExecutionUnconfirmed = false {
+    didSet { if oldValue != syncExecutionUnconfirmed { scheduleUpdate() } }
+  }
   var onRetrySend: ([String: Any]) -> Void = { _ in }
   var onTitlePress: ([String: Any]) -> Void = { _ in }
   var onPreview: ([String: Any]) -> Void = { _ in }

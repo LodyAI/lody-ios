@@ -60,6 +60,10 @@ final class LocalStore: @unchecked Sendable {
     try await wait { feed.state.revision == 4 }
     precondition(feed.state.entriesJSON.contains("accepted"))
     precondition(feed.state.isLiveUpdate, "Subsequent live revisions may animate their appended text")
+    fixture.receive?(.init(generation: 1, state: "live", sessionId: "session", session: #"{"v":1,"revision":5,"status":"syncing","syncDetails":{"since":1000,"document":{"phase":"confirmed"},"history":{"phase":"retrying","reason":"timeout"}},"entries":[]}"#))
+    try await wait { feed.state.syncDetails?.phase == .retrying }
+    precondition(feed.state.syncDetails?.history?.reason == "timeout")
+    precondition(feed.state.entriesJSON.contains("accepted") && !feed.state.isLiveUpdate)
     fixture.send(2, 0, "new-runtime")
     try await wait { feed.generation == 2 }
     precondition(feed.state.entriesJSON.contains("new-runtime"))

@@ -5,10 +5,29 @@ struct SessionBrowserPreview: Equatable, Sendable {
   var active: Bool
 }
 
+struct ConversationSyncDetails: Decodable, Equatable, Sendable {
+  enum Phase: String, Decodable, Sendable {
+    case connecting, syncing, retrying, disconnected, confirmed
+  }
+  struct Step: Decodable, Equatable, Sendable {
+    var phase: Phase
+    var reason: String?
+  }
+  var since: Double
+  var document: Step
+  var history: Step?
+
+  var phase: Phase {
+    let phases = [document.phase, history?.phase].compactMap { $0 }
+    return [.disconnected, .retrying, .connecting, .syncing].first(where: phases.contains) ?? .confirmed
+  }
+}
+
 struct SessionEnvelope: Sendable {
   var version: Int?
   var revision: Int?
   var status = ""
+  var syncDetails: ConversationSyncDetails?
   var overflow = false
   var entriesJSON = "[]"
   var billableTurnCount: Int?
@@ -25,6 +44,10 @@ struct SessionEnvelope: Sendable {
       version: (object["v"] as? NSNumber)?.intValue, revision: (object["revision"] as? NSNumber)?.intValue,
       status: object["status"] as? String ?? "", overflow: object["overflow"] as? Bool == true
     )
+    if let syncDetails = object["syncDetails"] as? [String: Any],
+       let data = try? JSONSerialization.data(withJSONObject: syncDetails) {
+      envelope.syncDetails = try? JSONDecoder().decode(ConversationSyncDetails.self, from: data)
+    }
     if let preview = object["preview"] as? [String: Any], let label = preview["label"] as? String {
       envelope.preview = SessionBrowserPreview(label: label, active: preview["active"] as? Bool == true)
     }
