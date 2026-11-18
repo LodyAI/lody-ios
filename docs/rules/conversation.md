@@ -51,7 +51,8 @@ Read before changing the conversation page: the transcript and its turns, header
 - File links follow `ChatFileLink`: an authored Markdown link to a file path draws the file icon and link colour, and inline code that is exactly one Markdown file path (`ChatFileLink.markdownCode`, web `matchWholeFilePath` narrowed to Markdown) becomes the same link in `FileMarkdownView.content`, never in the source. Native clients have no session file index, so a relative candidate is not confirmed before the tap; a missing file shows the preview's not-found state. An inline-code path inside an authored link stays that link's label.
 
 - Conversation sync details are available from the header's More menu and
-  from the waiting or interruption banner. The session stream and Roost
-  owner history are separate receive paths. Retained turns remain visible
+  from the waiting or interruption banner. Icon nodes and two directional
+  arrows show each receive path. The session stream and Roost owner history
+  have separate diagrams and statuses. Retained turns remain visible
   while a path is unconfirmed; they show execution status as unconfirmed
   and pause the live indicator until the current subscription catches up.

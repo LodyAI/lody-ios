@@ -72,6 +72,33 @@ def check_archive():
     ui.capture('unarchive-stays')
 
 
+def check_sync_flow():
+    ui.open_case('session-preview-sync-flow')
+    wait_probe('live', 'Sync diagram scenario did not load')
+    frame = ui.element('chat-more')['frame']
+    ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] + frame['height'] / 2))
+    tap_menu_item(catalog.text('chat.sync.title'))
+    control = spoken(ui.element('session-sync-document'))
+    history = spoken(ui.element('session-sync-history'))
+    device = catalog.text('chat.sync.device')
+    server = catalog.text('chat.sync.server')
+    request = catalog.text('chat.sync.request')
+    returned = catalog.text('chat.sync.returnRoute')
+    assert f'{request} {device} → {server}' in control, control
+    assert 'Preview Mac' not in control, control
+    assert f'{request} {device} → {server} → Preview Mac' in history, history
+    assert f'{returned} Preview Mac → {server} → {device}' in history, history
+    assert '·' not in control + history, (control, history)
+    wait_text(catalog.text('chat.sync.reason.timeout'))
+    ui.capture('sync-diagram')
+
+
+if os.environ.get('LODY_VERIFY_SESSION_SYNC_ONLY') == '1':
+    check_sync_flow()
+    print('PASS: the session sync diagrams expose the separate request and return paths and history failure')
+    sys.exit(0)
+
+
 if os.environ.get("LODY_VERIFY_SESSION_ARCHIVE_ONLY") == "1":
     wait_probe("live", "Archive scenario did not start")
     check_archive()
@@ -219,11 +246,15 @@ wait_probe('offline', 'Offline scenario did not start')
 ui.element('chat-overlay-status')
 ui.capture('offline')
 ui.axe('tap', '--id', 'chat-overlay-status', '--post-delay', '.5')
+ui.element('session-sync-document')
+tap_label(catalog.text('chat.sync.retry'))
 wait_probe('reconnect', 'Reconnect did not reach the session feed')
 wait_text('Live reply with a needle')
 
 ui.open_case('session-preview-find')
 ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-find-field' and 'needle' in (i.get('AXValue') or '') for i in items), 'Find query did not open the find bar')
 ui.capture('find-query')
+
+check_sync_flow()
 
 print('PASS: native session page renders cached then live history, title and header actions (copy submenu, rename, change owner), find, deletion return, offline reconnect and an incoming find query.')

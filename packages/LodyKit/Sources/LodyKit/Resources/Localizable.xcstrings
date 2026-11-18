@@ -533,13 +533,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Read request · %@"
+            "value": "Read request"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "读取请求 · %@"
+            "value": "读取请求"
           }
         }
       }
@@ -549,13 +549,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Updates return · %@"
+            "value": "Updates return"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "更新返回 · %@"
+            "value": "更新返回"
           }
         }
       }
