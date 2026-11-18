@@ -22,7 +22,7 @@ CHAT = ROOT / 'apps/ios/verification/kit/chat'
 BATCHES = {
     'pages': ['onboarding', 'home', 'home-grouping-crash', 'home-settings', 'home-workspace', 'schedules', 'home-states', 'navigation', 'licenses', 'create-parity', 'model-memory', 'project-picker', 'branch-picker', 'directory', 'project', 'activity', 'notifications', 'diagnostics', 'settings-baseline', 'preferences', 'queued-message-behavior'],
     'send': ['send', 'send-queue', 'send-guide', 'send-interrupt', 'send-rounds', 'send-scroll-guide', 'send-scroll-queue', 'send-scroll-normal', 'session-native', 'proposal-cards', 'session-simulator', 'permission-native', 'item-details', 'edit-message', 'session-share', 'agent-error', 'native-diff', 'native-workspace-changes', 'native-file-content', 'dictation'],
-    'settings': ['agents-settings', 'agents-presets', 'agents-pi', 'agents-auth-methods', 'prompt-shortcuts', 'project-visibility', 'github-settings', 'ai-usage', 'agent-roles'],
+    'settings': ['agents-settings', 'agents-presets', 'agents-pi', 'agents-auth-methods', 'prompt-shortcuts', 'project-visibility', 'github-settings', 'ai-usage', 'agent-roles', 'agent-role-agent-menu'],
 }
 SUITES = {
     'settings-workspace': BATCHES['settings'],
@@ -42,6 +42,7 @@ PREVIEW = {
     'role-mention-chat': 'mention-chat',
     'role-mention-sheet': 'mention-sheet',
     'agent-roles': 'agent-roles-preview',
+    'agent-role-agent-menu': 'agent-roles-preview',
     'session-native': 'session-preview-live',
     'dictation': 'session-preview-live',
     'proposal-cards': 'session-preview-cards-role-create',
@@ -509,7 +510,7 @@ try:
                 if case not in HOME_CASES:
                     ui.open_case(preview)
                     result['caseEntry'] = 'deep-link'
-                if case == 'agent-roles':
+                if case in ('agent-roles', 'agent-role-agent-menu'):
                     ui.wait(lambda items: any(item.get('AXUniqueId') in ('list-unavailable-action', 'list-notice-action') for item in items),
                             'Missing role list retry action')
                 else:
@@ -521,7 +522,8 @@ try:
                     ui.axe('tap', '--label', 'Fixtures')
                     ui.axe('tap', '--label', 'Image Fixture')
                     ui.element('preview-image:attachment:ui-verify-image')
-                ui.capture('before')
+                if case != 'agent-role-agent-menu':
+                    ui.capture('before')
                 script = Path(__file__).with_name(f'{case}.py') if case in ['toast', 'workspace-changes', 'simulator-preview', 'item-details', 'message-details', 'message-share', 'pull-request', 'project-picker', 'branch-picker', 'notifications', 'user-mentions', 'file-preview', 'html-preview', 'chat-performance', 'chat-stream-performance', 'settings', 'preferences', 'queued-message-behavior', 'send', 'send-handoff', 'send-rounds', 'send-queue', 'steer', 'send-guide', 'send-interrupt', 'smooth-scroll', 'composer', 'composer-glass', 'composer-video', 'markdown', 'mermaid', 'duration', 'process-counts', 'process-failed', 'agent-error', 'proposed-plan', 'changes', 'inline-diff', 'background', 'inbox', 'home', 'home-settings', 'schedules', 'home-workspace', 'home-states', 'ipad', 'licenses', 'navigation', 'model-memory', 'onboarding', 'context-menu', 'chat-chrome', 'title-rename', 'composer-rich', 'composer-fullscreen'] else CHAT / ('composer.py' if case.startswith('composer-') else f'{case}.py')
                 if case == 'home-grouping-crash':
                     script = Path(__file__).with_name('home-grouping-crash.py')
@@ -531,6 +533,8 @@ try:
                     script = Path(__file__).with_name('devices.py')
                 if case in ('diagnostics', 'directory', 'project', 'activity', 'settings-baseline', 'workspace-general', 'machine-settings', 'settings-form-backgrounds', 'prompt-shortcuts', 'project-visibility', 'github-settings', 'ai-usage', 'agent-roles'):
                     script = Path(__file__).with_name(f'{case}.py')
+                if case == 'agent-role-agent-menu':
+                    script = Path(__file__).with_name('agent-roles.py')
                 if case in ('session-native', 'proposal-cards', 'session-simulator', 'permission-native', 'native-diff', 'native-workspace-changes', 'native-file-content'):
                     script = Path(__file__).with_name(f'{case}.py')
                 if case == 'file-selection':
@@ -590,6 +594,8 @@ try:
                     command += ['--send']
                 else:
                     command += [str(output)]
+                if case == 'agent-role-agent-menu':
+                    command += ['--agent-menu-only']
                 if case.startswith('send-scroll-'):
                     command.append(case.removeprefix('send-scroll-'))
                 if case == 'agents-settings':

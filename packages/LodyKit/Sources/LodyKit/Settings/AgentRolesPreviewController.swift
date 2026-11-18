@@ -87,7 +87,7 @@ private final class AgentRolesFixture {
       if data.roles.contains(where: { $0.id != id && $0.name == fields.name.trimmingCharacters(in: .whitespacesAndNewlines) }) {
         throw Self.failure("role_duplicate")
       }
-      if base != nil, failSave {
+      if base != nil, targetChanges == nil, failSave {
         failSave = false
         throw Self.failure("role_conflict")
       }

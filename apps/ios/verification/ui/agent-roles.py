@@ -1,9 +1,10 @@
-"""Role management: access recovery, ownership, switching agents, create/readback and uncertain deletion."""
+"""Role management and focused verification of the native Agent menu."""
 import json,sys
 from driver import UI
 from settings_states import pull,unavailable,no_header_refresh
 import catalog
-ui=UI(*sys.argv[1:])
+ui=UI(*sys.argv[1:3])
+menu_only = '--agent-menu-only' in sys.argv
 def spoken(item):return ' '.join([str(item.get(key) or '') for key in ('AXLabel','AXValue')]+[spoken(child) for child in item.get('children') or []])
 def tap(identifier):
     f=ui.element(identifier)['frame']
@@ -31,6 +32,12 @@ def binding(index, machine, agent):
     identifier = f'role-bound-agent-{index}'
     ui.wait(lambda items: any(item.get('AXUniqueId') == identifier and machine in spoken(item) and agent in spoken(item)
                               for item in items), f'Expected {agent} on {machine}')
+def menu_item(label):
+    return ui.wait(lambda items: next((item for item in items if item.get('AXLabel') == label), None),
+                   f'Missing menu option {label}')
+def choose_agent(label):
+    menu_item(label)
+    ui.axe('tap', '--label', label, '--post-delay', '.4')
 def scroll_to(identifier):
     for _ in range(4):
         items=ui.state();node=next((item for item in items if item.get('AXUniqueId')==identifier),None)
@@ -42,8 +49,40 @@ retry = ui.wait(lambda items: next((item['AXUniqueId'] for item in items if item
                 'Missing role list retry action')
 if retry == 'list-unavailable-action':
     unavailable(ui, 'settings.roles.unavailable')
-ui.capture('roles-load-failed');tap(retry)
+if not menu_only:
+    ui.capture('roles-load-failed')
+tap(retry)
 ui.wait(lambda items: not any(item.get('AXUniqueId') in retry_ids for item in items), 'Role list retry did not complete')
+
+if menu_only:
+    toolbar('settings.roles.add')
+    tap('role-target')
+    choose_agent('Researcher')
+    ui.wait(lambda items: any(item.get('AXUniqueId') == 'role-target' and 'Researcher' in spoken(item) for item in items),
+            'New role did not select the Agent in place')
+    toolbar('common.cancel')
+    tap('role:review')
+    binding(0, 'Studio', 'Coder')
+    tap('role-bound-agent-0')
+    menu_item('Coder · Studio')
+    menu_item('Researcher · Studio')
+    menu_item('Reviewer · Laptop')
+    ui.element('role-name')
+    ui.capture('agent-menu')
+    choose_agent('Researcher · Studio')
+    binding(0, 'Studio', 'Researcher')
+    toolbar('common.cancel')
+    tap('role:review')
+    binding(0, 'Studio', 'Coder')
+    tap('role-bound-agent-0')
+    choose_agent('Reviewer · Laptop')
+    binding(0, 'Laptop', 'Reviewer')
+    toolbar('common.save')
+    tap('role:review')
+    binding(0, 'Laptop', 'Reviewer')
+    print(json.dumps({'nativeAgentMenu': True, 'cancelledChangeDiscarded': True, 'savedAgentReadBack': True}))
+    sys.exit(0)
+
 ui.element('role:review');no_header_refresh(ui)
 assert catalog.text('settings.roles.agentUnavailable') in spoken(ui.element('role:missing'))
 ui.capture('roles-list')
@@ -62,15 +101,6 @@ tap('role:review');tap('role-shared');ui.wait(lambda items:any(item.get('AXUniqu
 ui.wait(lambda items:any(item.get('AXUniqueId')=='role:review' and 'Mobile' in spoken(item) for item in items),'Edit was not read back')
 assert catalog.text('settings.roles.sharedValue') in spoken(ui.element('role:review'));tap('role:review');assert ui.element('role-name')['AXValue']=='Mobile';reveal_name();ui.capture('roles-edit-readback');toolbar('common.cancel')
 
-tap('role:review');binding(0, 'Studio', 'Coder');tap('role-bound-agent-0')
-assert 'Researcher' in spoken(ui.element('role-agent-choice-1'))
-assert 'Laptop' in spoken(ui.element('role-agent-choice-2'))
-ui.capture('roles-agent-picker');tap('role-agent-choice-1');binding(0, 'Studio', 'Researcher')
-toolbar('common.cancel');tap('role:review');binding(0, 'Studio', 'Coder')
-tap('role-bound-agent-0');tap('role-agent-choice-2');binding(0, 'Laptop', 'Reviewer')
-toolbar('common.save');ui.element('role:review');tap('role:review');binding(0, 'Laptop', 'Reviewer')
-ui.capture('roles-agent-switch-readback');toolbar('common.cancel')
-
 toolbar('settings.roles.add');ui.element('role-name');assert ui.element('role-shared')['AXValue']=='0'
 assert not next(item for item in ui.state() if item.get('AXLabel')==catalog.text('common.save'))['enabled']
 reveal_name();ui.capture('roles-empty-create');tap('role-machine');ui.element('m2');tap('m2');ui.wait(lambda items:any(item.get('AXUniqueId')=='role-machine' and 'Laptop' in spoken(item) for item in items),'Selected computer did not return to editor');assert 'Reviewer' in spoken(ui.element('role-target'));name('Helper');toolbar('common.save')
@@ -88,4 +118,4 @@ assert not any(item.get('AXUniqueId')=='role-name' for item in ui.state()),'Old 
 ui.capture('roles-account-switched')
 ui.open_case('settings-baseline-live');ui.element('agent-roles');ui.capture('roles-settings-entry');tap('agent-roles');ui.element('list-unavailable-action');ui.capture('roles-entry-offline')
 ui.open_case('settings-baseline-live');ui.element('agent-roles');ui.capture('roles-entry-return')
-print(json.dumps({'accessRecovered':True,'ownerOnly':True,'multiTargets':True,'agentSwitchReadback':True,'draftRetained':True,'privateCreate':True,'readback':True,'uncertainDeleteNeverReplayed':True,'accountSwitchClosesEditor':True}))
+print(json.dumps({'accessRecovered':True,'ownerOnly':True,'multiTargets':True,'draftRetained':True,'privateCreate':True,'readback':True,'uncertainDeleteNeverReplayed':True,'accountSwitchClosesEditor':True}))
