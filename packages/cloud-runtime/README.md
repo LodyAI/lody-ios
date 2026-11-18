@@ -219,3 +219,19 @@ capability/identity checks with synthetic data and deterministic signals.
 After changing this canonical package, Android must review and export a new
 whole-package vendor snapshot with updated source provenance and file hashes;
 do not patch the Android vendor copy by hand.
+
+## Catalog recovery
+
+Each bootstrap/catch-up window has a 16 MiB input and 100-page catch-up budget.
+The bootstrap budget includes its snapshot; reaching `upToDate` resets both
+counters for the next window. Transient read retries retain the current budget
+and replica. A limit after a previously synchronized replica discards it and
+bootstraps the latest snapshot; a fresh bootstrap that still exceeds the limit
+stops that stream. Writes are never replayed.
+
+Healthy `:meta` publishes `catalog` / `synced` pairs independently of machine
+streams. Machine projections remain at their last synchronized value while
+pending or failed; a machine with no projection contributes no projects.
+`syncError` describes metadata unavailability, while machine failures emit
+`diagnostic` with `sync_error:<reason>` and clear only that target's readiness.
+Creation and other machine operations retain their target readiness checks.

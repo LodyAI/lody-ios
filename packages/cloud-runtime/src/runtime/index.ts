@@ -249,10 +249,10 @@ function publish() {
     if (!watchers.has(machine)) watch(machine);
   refreshSessionUsage();
   channel.emit('creationOptionsChanged', {});
-  if (unhealthy.size || meta.machineIds.some((id) => !catalogs.has(id))) return;
+  if (unhealthy.has('meta')) return;
   const projects = new Map(meta.projects.map((p) => [p.id, p]));
   for (const id of meta.machineIds)
-    for (const p of catalogs.get(id)!.projects)
+    for (const p of catalogs.get(id)?.projects ?? [])
       projects.set(p.id, { ...projects.get(p.id), ...p });
   for (const [id, p] of projects) {
     const repo = gitRepos.get(id);
@@ -302,10 +302,24 @@ function watch(mode: string) {
   const controller = new AbortController();
   watchers.set(mode, controller);
   const { signal } = controller;
+  const reportError = (
+    reason:
+      'catalog_limit' | 'stream_closed' | 'stalled_cursor' | 'network_or_auth',
+  ) => {
+    // Native hosts interpret syncError as workspace unavailability. A machine
+    // failure only removes that machine's readiness, not the meta directory.
+    if (mode === 'meta') channel.emit('syncError', { reason, stream: mode });
+    else
+      channel.emit('diagnostic', {
+        stage: `sync_error:${reason}`,
+        stream: mode,
+      });
+  };
   void (async () => {
     let failures = 0;
     let providerSignature = '';
     while (!signal.aborted) {
+      let caughtUp = false;
       try {
         const authorization = await getGrant();
         if (signal.aborted) return;
@@ -367,6 +381,7 @@ function watch(mode: string) {
         let pages = 0;
         while (!signal.aborted) {
           if (upToDate) {
+            caughtUp = true;
             if (mode === 'meta') {
               const first = !state.metaReplica;
               // Keep the replica's identity across polls: in-flight calls
@@ -389,6 +404,9 @@ function watch(mode: string) {
             }
             failures = 0;
             pages = 0;
+            // Bootstrap includes its snapshot. Each later live/catch-up window
+            // gets a fresh budget, retained across transient read retries.
+            size = 0;
           }
           // A failed read has not imported bytes or advanced the cursor. Keep
           // that verified replica through transport loss and host suspension.
@@ -429,10 +447,7 @@ function watch(mode: string) {
             (error) => {
               unhealthy.add(mode);
               channel.emit('creationOptionsChanged', {});
-              channel.emit('syncError', {
-                reason: 'network_or_auth',
-                stream: mode,
-              });
+              reportError('network_or_auth');
               if (!(
                 error instanceof Error && error.message === 'runtime_suspended'
               ))
@@ -464,13 +479,20 @@ function watch(mode: string) {
         unhealthy.add(mode);
         channel.emit('creationOptionsChanged', {});
         const reason = error instanceof Error ? error.message : 'sync_failed';
-        channel.emit('syncError', {
-          reason:
-            (
-              ['catalog_limit', 'stream_closed', 'stalled_cursor'] as const
-            ).find((known) => known === reason) ?? 'network_or_auth',
-          stream: mode,
-        });
+        if (reason === 'catalog_limit' && caughtUp) {
+          // An old replica can have an arbitrarily long backlog. Discard it
+          // and try the server's compacted snapshot before declaring a limit.
+          channel.emit('diagnostic', {
+            stage: 'catalog_rebootstrap',
+            stream: mode,
+          });
+          continue;
+        }
+        reportError(
+          (['catalog_limit', 'stream_closed', 'stalled_cursor'] as const).find(
+            (known) => known === reason,
+          ) ?? 'network_or_auth',
+        );
         grant = undefined;
         if (reason === 'catalog_limit') return;
         try {

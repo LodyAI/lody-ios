@@ -23,6 +23,14 @@ test('persistent runtime applies live increments to the existing replica and adv
   flock.set(['m', 'session-s1'], { title: 'Before', machineId: 'm1' }, 2);
   const snapshot = flock.exportFile(),
     version = flock.version();
+  const machineFlock = new Flock('machine');
+  machineFlock.importFile(snapshot);
+  machineFlock.set(
+    ['localProject', 'p2'],
+    { name: 'Machine only', rootPath: '/b' },
+    3,
+  );
+  const machineSnapshot = machineFlock.exportFile();
   flock.set(['m', 'session-s1', 'title'], 'After', 3);
   flock.set(['m', 'session-s1', 'parentSessionId'], 'parent', 4);
   const update = new TextEncoder().encode(
@@ -51,7 +59,7 @@ test('persistent runtime applies live increments to the existing replica and adv
           snapshotOffset: '1',
           nextOffset: '1',
           upToDate: true,
-          snapshot: { body: snapshot },
+          snapshot: { body: this.isMeta ? snapshot : machineSnapshot },
           updates: [],
         },
       };
@@ -233,16 +241,22 @@ test('persistent runtime applies live increments to the existing replica and adv
   });
   assert.equal(started.kind, 'result');
   await pickerReady.promise;
+  const metaOnly = JSON.parse((await first).catalog);
+  assert.equal(metaOnly.sessions[0].title, 'Before');
   assert.equal(
-    envelopes.some(
-      (event) =>
-        event.kind === 'event' && ['catalog', 'synced'].includes(event.method),
-    ),
+    metaOnly.projects.length,
+    1,
+    'metadata projects remain available while machine sync is pending',
+  );
+  const machineReady = catalogEvent();
+  machineBootstrap.resolve();
+  const initial = JSON.parse((await machineReady).catalog);
+  assert.equal(
+    envelopes.some((e) => e.method === 'syncError'),
     false,
   );
-  machineBootstrap.resolve();
-  const initial = JSON.parse((await first).catalog);
   assert.equal(initial.sessions[0].title, 'Before');
+  assert.ok(initial.projects.some((p) => p.id === 'm1:local:p2'));
   assert.equal(
     initial.projects.find((p) => p.id === 'm1:local:p1').repoFullName,
     'Afilmory/afilmory',
@@ -252,7 +266,7 @@ test('persistent runtime applies live increments to the existing replica and adv
     runtimeEvents
       .filter((m) => m.method === 'catalog' || m.method === 'synced')
       .map((m) => m.method),
-    ['catalog', 'synced'],
+    ['catalog', 'synced', 'catalog', 'synced'],
   );
   assert.deepEqual(
     runtimeEvents.find(
@@ -297,7 +311,7 @@ test('persistent runtime applies live increments to the existing replica and adv
       .repoFullName,
     'Afilmory/afilmory',
   );
-  assert.equal(changed.revision, 2);
+  assert.equal(changed.revision, 3);
   assert.equal(
     JSON.parse(changed.catalog).sessions[0].parentSessionId,
     'parent',
@@ -337,8 +351,13 @@ test('persistent runtime applies live increments to the existing replica and adv
     workspaceId: 'synthetic-workspace',
   });
   assert.deepEqual(probe.payload, {
-    creationOptionsTrial: { 'm1:local:p1': 'ok agents=0 capabilities=0' },
-    machines: { m1: { otherKeys: ['e', 'm'], capabilities: [] } },
+    creationOptionsTrial: {
+      'm1:local:p1': 'ok agents=0 capabilities=0',
+      'm1:local:p2': 'ok agents=0 capabilities=0',
+    },
+    machines: {
+      m1: { otherKeys: ['e', 'localProject', 'm'], capabilities: [] },
+    },
   });
   const writes = {
     createSession: {
