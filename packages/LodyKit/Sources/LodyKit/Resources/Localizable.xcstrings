@@ -528,34 +528,87 @@
         }
       }
     },
-    "chat.sync.request" : {
+    "chat.sync.source": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Read request"
+            "value": "Source"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "读取请求"
+            "value": "数据来源"
           }
         }
       }
     },
-    "chat.sync.returnRoute": {
+    "chat.sync.relay": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Updates return"
+            "value": "Relay"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "更新返回"
+            "value": "转发"
+          }
+        }
+      }
+    },
+    "chat.sync.destination": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receiver"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接收方"
+          }
+        }
+      }
+    },
+    "chat.sync.directFlow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ syncs data to %2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 将数据同步到%2$@"
+          }
+        }
+      }
+    },
+    "chat.sync.relayedFlow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ syncs data through %2$@ to %3$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 通过 %2$@ 将数据同步到%3$@"
           }
         }
       }

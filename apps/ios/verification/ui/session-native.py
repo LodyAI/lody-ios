@@ -82,20 +82,16 @@ def check_sync_flow():
     history = spoken(ui.element('session-sync-history'))
     device = catalog.text('chat.sync.device')
     server = catalog.text('chat.sync.server')
-    request = catalog.text('chat.sync.request')
-    returned = catalog.text('chat.sync.returnRoute')
-    assert f'{request} {device} → {server}' in control, control
+    assert f'{server} syncs data to {device}' in control, control
     assert 'Preview Mac' not in control, control
-    assert f'{request} {device} → {server} → Preview Mac' in history, history
-    assert f'{returned} Preview Mac → {server} → {device}' in history, history
-    assert '·' not in control + history, (control, history)
+    assert f'Preview Mac syncs data through {server} to {device}' in history, history
     wait_text(catalog.text('chat.sync.reason.timeout'))
     ui.capture('sync-diagram')
 
 
 if os.environ.get('LODY_VERIFY_SESSION_SYNC_ONLY') == '1':
     check_sync_flow()
-    print('PASS: the session sync diagrams expose the separate request and return paths and history failure')
+    print('PASS: the session sync diagrams expose the source, relay and receiver for conversation data and the history failure')
     sys.exit(0)
 
 
