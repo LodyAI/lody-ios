@@ -20,6 +20,7 @@ struct SessionRuntimeEvent: Sendable {
 
 struct SessionFeedState: Equatable, Sendable {
   var status = "syncing"
+  var syncDetails: ConversationSyncDetails?
   var revision = -1
   var overflow = false
   var entriesJSON = "[]"
@@ -140,6 +141,7 @@ final class SessionFeed {
             self.apply(envelope, generation: generation)
           } else if ["starting", "background", "failed", "stopped"].contains(phase) {
             self.state.status = phase
+            self.state.syncDetails = nil
             self.state.isLiveUpdate = false
             self.awaitingSnapshot = true
             self.changed?()
@@ -161,6 +163,7 @@ final class SessionFeed {
   private func apply(_ envelope: SessionEnvelope?, generation: Int) {
     guard let envelope else {
       state.status = "offline"
+      state.syncDetails = nil
       state.isLiveUpdate = false
       awaitingSnapshot = true
       changed?()
@@ -181,7 +184,7 @@ final class SessionFeed {
       received = true
       awaitingSnapshot = false
       state = SessionFeedState(
-        status: "live", revision: revision, entriesJSON: envelope.entriesJSON,
+        status: "live", syncDetails: envelope.syncDetails, revision: revision, entriesJSON: envelope.entriesJSON,
         billableTurnCount: envelope.billableTurnCount, historyHasMore: envelope.historyHasMore,
         historyLoading: envelope.historyLoading, composerJSON: envelope.composerJSON, usageJSON: envelope.usageJSON, preview: envelope.preview, transcript: envelope.transcript
       )
@@ -190,6 +193,7 @@ final class SessionFeed {
       state.isLiveUpdate = false
       awaitingSnapshot = true
       state.status = envelope.status
+      state.syncDetails = envelope.syncDetails
     }
     changed?()
   }

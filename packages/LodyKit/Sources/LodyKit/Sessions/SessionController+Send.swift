@@ -249,6 +249,10 @@ extension SessionController {
   private func connection(_ feed: SessionFeedState) -> String {
     if feed.overflow { return "" }
     if ["offline", "failed", "stopped"].contains(feed.status) { return "paused" }
+    if let phase = feed.syncDetails?.phase {
+      if phase == .syncing { return "syncing" }
+      if phase == .retrying { return "retrying" }
+    }
     return feed.status == "live" ? "" : "connecting"
   }
 

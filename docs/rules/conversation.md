@@ -49,3 +49,10 @@ Read before changing the conversation page: the transcript and its turns, header
 - Plan Mode follows web `plan-surface.ts`: a plan-approval card (ACP kind `switch_mode`) carries its plan in the runtime summary's `plan` (Claude's `rawInput.plan`, Kimi's first text block), and `ChatEntry.showingCarriedPlans` turns it into a `proposed_plan` row directly above the card, so it uses the same `ChatPlanCell` as Codex plans. A turn that already has its own non-empty `proposed_plan` (Codex) keeps only that plan. A plan whose approval is pending opens in full once and offers the request from the card; the permission sheet is never presented over that plan automatically, and an automatically opened sheet steps aside once the request turns out to be such a plan approval. Once answered, the approval row reads as the chosen option (runtime `chosenOptionId`), as web `PermissionRequestBlock` does.
 
 - File links follow `ChatFileLink`: an authored Markdown link to a file path draws the file icon and link colour, and inline code that is exactly one Markdown file path (`ChatFileLink.markdownCode`, web `matchWholeFilePath` narrowed to Markdown) becomes the same link in `FileMarkdownView.content`, never in the source. Native clients have no session file index, so a relative candidate is not confirmed before the tap; a missing file shows the preview's not-found state. An inline-code path inside an authored link stays that link's label.
+
+- Conversation sync details are available from the header's More menu and
+  from the waiting or interruption banner. Each diagram names the source, any
+  relay and the receiving device, with arrows in the direction conversation data
+  flows. The session stream and Roost owner history have separate statuses. Retained turns remain visible
+  while a path is unconfirmed; they show execution status as unconfirmed
+  and pause the live indicator until the current subscription catches up.

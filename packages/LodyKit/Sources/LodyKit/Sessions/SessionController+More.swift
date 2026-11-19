@@ -1,5 +1,6 @@
 import LodyCore
 import UIKit
+import SwiftUI
 
 /// Runtime reads behind the More menu's Copy submenu; preview fixtures script them.
 @MainActor
@@ -43,6 +44,9 @@ extension SessionController {
       })
       if let owner = ownerMenu(session) { items.append(owner) }
     }
+    items.append(UIAction(title: text("chat.sync.title"), image: UIImage(systemName: "arrow.trianglehead.clockwise.rotate.90")) { [weak self] _ in
+      self?.showSyncDetails()
+    })
     items.append(copyMenu(session))
     return items
   }

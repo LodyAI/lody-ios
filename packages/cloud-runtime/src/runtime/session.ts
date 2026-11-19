@@ -92,6 +92,7 @@ type SessionState = {
   target?: SessionTarget;
   scopeIsCurrent?: () => boolean;
   historyReady?: boolean;
+  historyRefreshing?: boolean;
   streamReady?: boolean;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
@@ -122,6 +123,10 @@ type SessionState = {
   backgroundWork?: { id: string; turnId: string; guide?: boolean };
   status: string;
   reason?: string;
+  syncSince: number;
+  streamStarted?: boolean;
+  streamFault?: ReadFault;
+  historyFault?: ReadFault;
   pending?: ReturnType<typeof setTimeout>;
   firstQueuedAt: number;
   lastSignal: string;
@@ -144,7 +149,29 @@ type SessionState = {
   read?: { stage: ReadStage; startedAt: number; stalled?: boolean };
   readFailures: number;
 };
+type ReadFault = { phase: 'retrying' | 'disconnected'; reason: string };
 type ReadStage = 'bootstrap' | 'catchup' | 'poll';
+
+function readFault(error: unknown, phase: ReadFault['phase']): ReadFault {
+  const code = traceCode(error);
+  const reason =
+    code?.includes('timeout') || code === 'aborterror'
+      ? 'timeout'
+      : code === 'network_error' || code === 'network_unavailable'
+        ? 'network'
+        : code === 'unauthorized' || code === 'grant_expired'
+          ? 'authorization'
+          : code === 'metadata_not_ready'
+            ? 'metadata'
+            : code === 'stream_closed'
+              ? 'stream_closed'
+              : code === 'stalled_cursor'
+                ? 'stalled_cursor'
+                : code === 'session_limit'
+                  ? 'session_limit'
+                  : 'read';
+  return { phase, reason };
+}
 const readLimit: Record<ReadStage, number> = {
   bootstrap: 15_000,
   catchup: 15_000,
@@ -773,6 +800,9 @@ export function traceStalledReads(now = Date.now()) {
     const ageMs = now - read.startedAt;
     if (ageMs < readLimit[read.stage] + stallGrace) continue;
     read.stalled = true;
+    if (state.status === 'live' && !state.historyRefreshing)
+      state.syncSince = read.startedAt;
+    scheduleEmit(state, state.status, state.reason);
     trace(state, 'stalled', { stage: read.stage, ageMs, status: state.status });
   }
 }
@@ -904,7 +934,30 @@ function flush(state: SessionState) {
       });
     else delete snapshot.billableTurnCount;
   }
-  let session = JSON.stringify(snapshot);
+  const syncDetails = {
+    since: state.syncSince,
+    document:
+      state.streamFault ??
+      (state.read?.stalled
+        ? { phase: 'syncing', reason: 'timeout' }
+        : {
+            phase: state.streamReady
+              ? 'confirmed'
+              : state.streamStarted
+                ? 'syncing'
+                : 'connecting',
+          }),
+    history:
+      state.target?.backend === 'roost'
+        ? (state.historyFault ?? {
+            phase:
+              state.historyReady && !state.historyRefreshing
+                ? 'confirmed'
+                : 'syncing',
+          })
+        : undefined,
+  };
+  let session = JSON.stringify({ ...snapshot, syncDetails });
   // A window of long turns can still exceed the host limit: keep the newest
   // half of its turns until it fits or one turn remains. Older history then
   // stays unavailable, because loading it would exceed the limit again.
@@ -914,7 +967,7 @@ function flush(state: SessionState) {
     start = pageStart(history, history.length, Math.ceil(turns / 2));
     state.historyClipped = true;
     snapshot = finish(project());
-    session = JSON.stringify(snapshot);
+    session = JSON.stringify({ ...snapshot, syncDetails });
   }
   state.emit({
     type: active === state ? 'session' : 'sessionCache',
@@ -958,6 +1011,10 @@ function isWorking(state: SessionState) {
   return false;
 }
 function scheduleEmit(state: SessionState, status: string, reason?: string) {
+  // Writes may finish during an outage. A write receipt cannot confirm a read.
+  if (status === 'live' && !state.ready) status = state.status;
+  if (state.status === 'live' && status !== 'live' && !state.historyRefreshing)
+    state.syncSince = Date.now();
   if (status !== state.status && sessions.get(state.id) === state)
     trace(state, 'status', { status, code: traceCode(reason) });
   state.status = status;
@@ -1180,6 +1237,7 @@ export async function openSession(
     ready: false,
     sending: false,
     status: 'syncing',
+    syncSince: Date.now(),
     firstQueuedAt: 0,
     lastSignal: '',
     unsent: new Map(),
@@ -1203,10 +1261,12 @@ export async function openSession(
   };
   const retryStream = (error: unknown) => {
     state.streamReady = false;
+    state.streamFault = readFault(error, 'retrying');
     retrying(error);
   };
   const retryHistory = (error: unknown) => {
     state.historyReady = false;
+    state.historyFault = readFault(error, 'retrying');
     retrying(error);
   };
   const updateReadiness = () => {
@@ -1235,6 +1295,9 @@ export async function openSession(
         retryStream,
       );
       if (sessions.get(id) !== state) return;
+      state.streamStarted = true;
+      state.streamFault = undefined;
+      event('syncing');
       let size = 0;
       const consume = (bytes: Uint8Array, snapshot = false) => {
         size += bytes.length;
@@ -1301,13 +1364,16 @@ export async function openSession(
               if (!value) throw new Error('metadata_not_ready');
               return value;
             },
-            retrying,
+            retryStream,
           );
       }
       if (!target) throw new Error('metadata_not_ready');
       if (sessions.get(id) !== state) return;
       state.target = target;
+      state.streamReady = upToDate;
+      state.streamFault = undefined;
       if (target.backend === 'roost') {
+        event('syncing');
         const reader = createUpstreamRoostHistory({
           accountId: target.accountId,
           workspaceId: workspace,
@@ -1362,6 +1428,7 @@ export async function openSession(
         refreshMetadata();
         reader.metadataChanged(state.roostMetadata);
         state.historyReady = true;
+        state.historyFault = undefined;
         void (async () => {
           try {
             while (!controller.signal.aborted) {
@@ -1371,6 +1438,19 @@ export async function openSession(
                 retryHistory,
               );
               if (sessions.get(id) !== state) return;
+              const startedAt = Date.now();
+              const notice = setTimeout(() => {
+                if (
+                  sessions.get(id) !== state ||
+                  controller.signal.aborted ||
+                  state.historyFault
+                )
+                  return;
+                if (state.status === 'live' && !state.read?.stalled)
+                  state.syncSince = startedAt;
+                state.historyRefreshing = true;
+                event(state.status);
+              }, 400);
               await retrySessionRead(
                 controller.signal,
                 () =>
@@ -1384,16 +1464,19 @@ export async function openSession(
                     window = retained;
                   }),
                 retryHistory,
-              );
+              ).finally(() => clearTimeout(notice));
               if (reader.metadataChanged(state.roostMetadata))
                 refreshMetadata();
               state.historyReady = true;
+              state.historyRefreshing = false;
+              state.historyFault = undefined;
               updateReadiness();
               if (state.ready) event('live');
             }
           } catch (error) {
             if (!controller.signal.aborted && sessions.get(id) === state) {
               state.historyReady = false;
+              state.historyFault = readFault(error, 'disconnected');
               state.ready = false;
               event(
                 'offline',
@@ -1428,6 +1511,7 @@ export async function openSession(
                 ...(upToDate ? { live: 'long-poll' as const } : {}),
               });
               if (!result.ok) throw new Error(result.result.code);
+              if (state.read?.stalled) changed = true;
               return result;
             }),
           retryStream,
@@ -1443,6 +1527,7 @@ export async function openSession(
         cursor = next.result.cursor;
         upToDate = next.result.upToDate;
         if (next.result.closed) throw new Error('stream_closed');
+        state.streamFault = undefined;
         if (!next.result.payload?.body.length && upToDate)
           await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -1450,7 +1535,13 @@ export async function openSession(
       const failed = error instanceof Error ? error : new Error('sync_failed');
       settleLive(state, failed);
       if (controller.signal.aborted || sessions.get(id) !== state) return;
-      state.streamReady = false;
+      if (state.target?.backend === 'roost' && !state.roostWindow) {
+        state.historyReady = false;
+        state.historyFault = readFault(failed, 'disconnected');
+      } else {
+        state.streamReady = false;
+        state.streamFault = readFault(failed, 'disconnected');
+      }
       state.ready = false;
       event('offline', failed.message);
     }

@@ -5,6 +5,8 @@ final class ChatOverlay: UIView {
   enum Slot: Equatable {
     case idle
     case connecting
+    case syncing
+    case retrying
     case paused
   }
 
@@ -15,6 +17,8 @@ final class ChatOverlay: UIView {
   static func slot(connection: String) -> Slot {
     if connection == "paused" { return .paused }
     if connection == "connecting" { return .connecting }
+    if connection == "syncing" { return .syncing }
+    if connection == "retrying" { return .retrying }
     return .idle
   }
 
@@ -31,6 +35,7 @@ final class ChatOverlay: UIView {
     }
   }
   var onReconnect: (() -> Void)?
+  var onSyncDetails: (() -> Void)?
   var onScrollToBottom: (() -> Void)?
 
   private let statusSurface = CKGlassSurface(interactive: true)
@@ -75,6 +80,7 @@ final class ChatOverlay: UIView {
     statusSurface.setContentHuggingPriority(.required, for: .horizontal)
     statusButton.addAction(UIAction { [weak self] _ in
       guard let self else { return }
+      if let openDetails = self.onSyncDetails { openDetails(); return }
       switch self.slot {
       case .paused: self.onReconnect?()
       default: break
@@ -119,7 +125,7 @@ final class ChatOverlay: UIView {
   override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
     guard !isHidden, isUserInteractionEnabled, alpha > 0.01 else { return nil }
     for button in [scrollButton, statusButton] {
-      let visible = button === scrollButton ? scrollVisible : slot.isActionable
+      let visible = button === scrollButton ? scrollVisible : statusIsActionable
       guard visible else { continue }
       let bounds = button.bounds
       let target = bounds.insetBy(
@@ -132,6 +138,8 @@ final class ChatOverlay: UIView {
     return hit === self ? nil : hit
   }
 
+  private var statusIsActionable: Bool { slot != .idle && (slot.isActionable || onSyncDetails != nil) }
+
   private func apply(animated: Bool? = nil) {
     let showStatus = slot != .idle
     let showScroll = scrollVisible
@@ -142,8 +150,8 @@ final class ChatOverlay: UIView {
       statusButton.configuration = configuration
       statusButton.accessibilityLabel = slot.title
     }
-    statusButton.accessibilityTraits = slot.isActionable ? .button : .staticText
-    statusButton.isUserInteractionEnabled = slot.isActionable
+    statusButton.accessibilityTraits = statusIsActionable ? .button : .staticText
+    statusButton.isUserInteractionEnabled = statusIsActionable
     let shouldAnimate = (animated ?? (window != nil && !UIAccessibility.isReduceMotionEnabled))
       && UIView.areAnimationsEnabled
     if active { isHidden = false }
@@ -166,6 +174,8 @@ private extension ChatOverlay.Slot {
     switch self {
     case .paused: String(localized: "native.chat.connection.paused", bundle: .lody)
     case .connecting: String(localized: "native.chat.connection.connecting", bundle: .lody)
+    case .syncing: String(localized: "chat.sync.syncing", bundle: .lody)
+    case .retrying: String(localized: "chat.sync.retrying", bundle: .lody)
     case .idle: ""
     }
   }

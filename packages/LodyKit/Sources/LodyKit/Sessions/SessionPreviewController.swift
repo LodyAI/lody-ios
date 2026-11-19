@@ -303,6 +303,15 @@ private final class SessionPreviewFixture {
       object["entries"] = entries
       session = SessionController.json(object)
     }
+    if bar == "sync-flow", let data = session?.data(using: .utf8),
+       var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+      object["syncDetails"] = [
+        "since": Date().timeIntervalSince1970 * 1000 - 42_000,
+        "document": ["phase": "confirmed"],
+        "history": ["phase": "retrying", "reason": "timeout"],
+      ]
+      session = SessionController.json(object)
+    }
     if bar.hasPrefix("cards-") {
       session = Self.cardsEnvelope(scenario: bar, revision: revision, outcomes: cardOutcomes)
     }

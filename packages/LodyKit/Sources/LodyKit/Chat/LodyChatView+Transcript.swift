@@ -314,6 +314,15 @@ extension LodyChatView {
       projected,
       inFlight: Set(projected.map(\.entryID).filter { ChatSendHandoff.isInFlight(id: $0) })
     )
+    if syncExecutionUnconfirmed {
+      for index in projected.indices where projected[index].kind == "duration" && projected[index].running {
+        projected[index].running = false
+        projected[index].symbol = "exclamationmark.circle"
+        projected[index].text = String(localized: "chat.sync.executionUnconfirmed", bundle: .lody)
+        projected[index].detail = ""
+        projected[index].workDurationMs = nil
+      }
+    }
     // Keep a confirmed status in the layout while its height and opacity shrink.
     // Remove it only after the adjacent bubble has reached its final position.
     let activeIDs = Set(projected.map(\.id))
