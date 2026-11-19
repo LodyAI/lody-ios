@@ -6,7 +6,7 @@ import {
   openSession,
   loadOlderSession,
   releaseReserve,
-  traceSessionResume,
+  resumeSessionReads,
   traceStalledReads,
   startAcceptedInputs,
   stopSessions,
@@ -163,7 +163,7 @@ export function registerLifecycle(ctx: RuntimeContext) {
     if (!state.workspace) return {};
     if (active) {
       ctx.startPresence();
-      traceSessionResume();
+      resumeSessionReads();
       resumeAcceptedInputs();
     } else ctx.stopPresence();
     return {};

@@ -104,6 +104,10 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
     wake() {
       wake?.();
     },
+    requestRefresh() {
+      generation++;
+      notify?.();
+    },
     metadataChanged(metadata: readonly Record<string, unknown>[] | undefined) {
       const seen = changes.splice(0);
       if (!metadata) return true;
@@ -123,13 +127,14 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
         readDirectory: data.history.readDirectory,
       });
     },
-    async latest() {
+    async latest(refresh = false) {
       const started = generation;
       const pending = initial;
       initial = undefined;
-      const page = pending
-        ? await pending
-        : await data.history.readLatestDirectoryPage(40);
+      const page =
+        pending && !refresh
+          ? await pending
+          : await data.history.readLatestDirectoryPage(40, { refresh });
       const window = await pageWindow(page);
       consumed = started;
       return window;
@@ -149,19 +154,13 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
         throw new Error('history_observation_superseded');
       return { ...page, turns: [...page.turns, ...window.turns] };
     },
-    async waitForChange(_window: RoostWindow) {
+    async waitForChange() {
       if (consumed === generation)
         await new Promise<void>((resolve) => {
           notify = resolve;
         });
       notify = undefined;
       options.signal.throwIfAborted();
-      const started = generation;
-      const window = await pageWindow(
-        await data.history.readLatestDirectoryPage(40),
-      );
-      consumed = started;
-      return window;
     },
   };
 }

@@ -40,7 +40,7 @@ test('session reads report retries, status changes and the in-flight read on res
     while (reads < 2 && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(reads, 2, 'The failed long-poll is retried');
-    runtime.traceSessionResume();
+    runtime.resumeSessionReads();
     runtime.traceStalledReads(Date.now() + 49_000);
     assert.ok(
       !traces.some((trace) => trace.event === 'stalled'),
