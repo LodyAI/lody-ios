@@ -3,7 +3,10 @@
 Source is from public Lody commit
 [`57750dd60f972c6c76510d0191cfc8cfb74afe52`](https://github.com/LodyAI/Lody/commit/57750dd60f972c6c76510d0191cfc8cfb74afe52).
 Every file under `packages/components/` and `packages/shared/` is copied verbatim
-from the same repository-relative path at that commit.
+from the same repository-relative path at that commit, with one reader change:
+the latest-directory lookup accepts a refresh option that fetches from the
+owner before replacing the cache. The mobile foreground recheck uses this
+option even when the previous window is cached.
 `packages/acp-extension-dsh/src/capabilities.ts` is from its upstream submodule
 commit `b1b0735fd8c38d191c87d6fbd14f7a27c0f0421e`, with its
 [license](../../licenses/acp-extension-dsh-LICENSE.txt) in the runtime package.

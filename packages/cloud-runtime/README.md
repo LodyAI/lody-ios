@@ -46,9 +46,11 @@ carries the shared queue and human-input receipts.
 Both the control stream and owner history must be ready before the runtime
 reports a Roost session as live. A failed read clears that reader's readiness
 until it recovers, while the other reader can continue. A Streams tail receipt
-confirms document sync only after Loro applies the received updates. On iOS
-foreground wake, the retained session rechecks its existing cursor and ignores
-completion from the old read. Android opens a fresh watch on foreground wake.
+confirms document sync only after Loro applies the received updates. Pending
+operations affect the sync indicator and leave existing session controls
+available. On iOS foreground wake, the retained session rechecks the Streams
+cursor and the Roost owner's latest page. Both steps need fresh confirmation.
+Android opens a fresh watch on foreground wake.
 
 The iOS runtime package holds the authoring source in `vendor/upstream-roost`.
 The iOS asset build verifies the generated `src/runtime/upstream-roost.js` against

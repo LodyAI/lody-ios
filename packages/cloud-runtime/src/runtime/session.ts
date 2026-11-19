@@ -128,6 +128,8 @@ type SessionState = {
   /** A retained session must finish a read started after its last foreground wake. */
   streamWake?: AbortController;
   needsFreshStreamRead?: boolean;
+  streamApplyPending?: boolean;
+  needsFreshHistoryRead?: boolean;
   streamFault?: ReadFault;
   historyFault?: ReadFault;
   pending?: ReturnType<typeof setTimeout>;
@@ -819,6 +821,10 @@ export function resumeSessionReads() {
     if (!state.needsFreshStreamRead && state.status === 'live')
       state.syncSince = Date.now();
     state.needsFreshStreamRead = true;
+    if (state.roostReader) {
+      state.needsFreshHistoryRead = true;
+      state.roostReader.requestRefresh();
+    }
     flush(state);
   }
   trace(state, 'resume', {
@@ -949,7 +955,9 @@ function flush(state: SessionState) {
         ? { phase: 'syncing', reason: 'timeout' }
         : {
             phase:
-              state.streamReady && !state.needsFreshStreamRead
+              state.streamReady &&
+              !state.streamApplyPending &&
+              !state.needsFreshStreamRead
                 ? 'confirmed'
                 : state.streamStarted
                   ? 'syncing'
@@ -959,7 +967,9 @@ function flush(state: SessionState) {
       state.target?.backend === 'roost'
         ? (state.historyFault ?? {
             phase:
-              state.historyReady && !state.historyRefreshing
+              state.historyReady &&
+              !state.historyRefreshing &&
+              !state.needsFreshHistoryRead
                 ? 'confirmed'
                 : 'syncing',
           })
@@ -980,7 +990,11 @@ function flush(state: SessionState) {
   state.emit({
     type: active === state ? 'session' : 'sessionCache',
     sessionId: state.id,
-    synced: state.status === 'live' && !state.needsFreshStreamRead,
+    synced:
+      state.status === 'live' &&
+      !state.streamApplyPending &&
+      !state.needsFreshStreamRead &&
+      !state.needsFreshHistoryRead,
     backgroundWork: backgroundProgress(state),
     session,
   });
@@ -1307,7 +1321,6 @@ export async function openSession(
       state.streamFault = undefined;
       event('syncing');
       let size = 0;
-      let missingUpdates = false;
       const consume = (bytes: Uint8Array, snapshot = false) => {
         size += bytes.length;
         if (size > 32 * 1024 * 1024) throw new Error('session_limit');
@@ -1316,8 +1329,9 @@ export async function openSession(
           : state.doc.importBatch(decodeFrames(bytes));
         // An import can accept bytes and still leave their operations waiting
         // for dependencies. Check the retained backlog after later imports.
-        if (result.pending?.size || missingUpdates)
-          missingUpdates = state.doc.exportPendingUpdates() !== undefined;
+        if (result.pending?.size || state.streamApplyPending)
+          state.streamApplyPending =
+            state.doc.exportPendingUpdates() !== undefined;
         state.roostReader?.wake();
       };
       if (data.snapshotOffset !== '-1' && data.snapshot)
@@ -1385,7 +1399,7 @@ export async function openSession(
       if (sessions.get(id) !== state) return;
       state.target = target;
       state.streamWake = new AbortController();
-      state.streamReady = upToDate && !missingUpdates;
+      state.streamReady = upToDate;
       state.streamFault = undefined;
       if (target.backend === 'roost') {
         event('syncing');
@@ -1403,7 +1417,7 @@ export async function openSession(
           watch: target.watch,
         });
         state.roostReader = reader;
-        let window = await retrySessionRead(
+        const window = await retrySessionRead(
           controller.signal,
           () => reader.latest(),
           retryHistory,
@@ -1447,9 +1461,9 @@ export async function openSession(
         void (async () => {
           try {
             while (!controller.signal.aborted) {
-              const next = await retrySessionRead(
+              await retrySessionRead(
                 controller.signal,
-                () => reader.waitForChange(window),
+                () => reader.waitForChange(),
                 retryHistory,
               );
               if (sessions.get(id) !== state) return;
@@ -1470,15 +1484,26 @@ export async function openSession(
                 controller.signal,
                 () =>
                   queueRoostRead(state, async () => {
-                    let retained = await reader.latest();
-                    const start = state.roostWindow?.start ?? next.start;
+                    const wake = state.streamWake;
+                    let retained = await reader.latest(
+                      state.needsFreshHistoryRead,
+                    );
+                    const start = state.roostWindow?.start ?? retained.start;
                     while (retained.cursor && retained.start > start)
                       retained = await reader.older(retained);
                     if (sessions.get(id) !== state) return;
                     installHistory(state, retained);
-                    window = retained;
+                    if (wake === state.streamWake)
+                      state.needsFreshHistoryRead = false;
                   }),
-                retryHistory,
+                (error) => {
+                  if (!state.needsFreshHistoryRead) {
+                    retryHistory(error);
+                    return;
+                  }
+                  state.historyFault = readFault(error, 'retrying');
+                  event(state.status, state.reason);
+                },
               ).finally(() => clearTimeout(notice));
               if (reader.metadataChanged(state.roostMetadata))
                 refreshMetadata();
@@ -1504,7 +1529,7 @@ export async function openSession(
       pages = 0;
       let changed = true;
       while (!controller.signal.aborted) {
-        state.streamReady = upToDate && !missingUpdates;
+        state.streamReady = upToDate;
         updateReadiness();
         if (upToDate) {
           if (changed || state.status !== 'live')
@@ -1556,9 +1581,11 @@ export async function openSession(
         state.streamFault = undefined;
         if (!next.result.payload?.body.length && upToDate) {
           // Publish the applied tail before pacing an empty poll.
-          state.streamReady = !missingUpdates;
+          state.streamReady = true;
           updateReadiness();
-          event(state.ready ? 'live' : 'syncing');
+          if (changed || state.status !== 'live')
+            event(state.ready ? 'live' : 'syncing');
+          changed = false;
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }

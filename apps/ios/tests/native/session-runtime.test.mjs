@@ -250,9 +250,12 @@ test(
     let onRead = nextRead.resolve;
     const fixture = await openTestSession({
       seedServer(doc) {
-        doc.getList('history').push({ id: 'old', role: 'user', items: [] });
+        doc
+          .getList('history')
+          .push({ id: 'old', role: 'assistant', finished: false, items: [] });
         doc.commit();
       },
+      onRpc: async () => ({ result: { success: true } }),
       readSession(options) {
         const response = Promise.withResolvers();
         const call = { options, reply: response.resolve };
@@ -308,9 +311,112 @@ test(
     await fixture.reopen();
     check('syncing', ['old']);
     assert.equal(next.options.offset, '3');
+    const stop = await fixture.runtime.controlTurn({
+      action: 'stop',
+      sessionId: 's1',
+      machineId: 'm1',
+      turnId: 'old',
+    });
+    assert.equal(stop.state, 'stopped');
     await advance(next, '4', first);
     await fixture.reopen();
     check('confirmed', ['old', 'dependency', 'new']);
+  },
+);
+
+test(
+  'foreground confirmation waits for a fresh Roost owner page',
+  { timeout: 5_000 },
+  async (t) => {
+    let onRead = Promise.withResolvers();
+    const ownerRecheck = Promise.withResolvers();
+    const ownerRequest = Promise.withResolvers();
+    const ownerApplied = Promise.withResolvers();
+    let revision = 1;
+    const fixture = await openTestSession({
+      target: { backend: 'roost', machineId: 'm1' },
+      readSession({ signal }) {
+        const reply = Promise.withResolvers();
+        signal.addEventListener('abort', () => reply.reject(signal.reason), {
+          once: true,
+        });
+        onRead.resolve(reply.resolve);
+        return reply.promise;
+      },
+      onEvent(event) {
+        if (!event.session) return;
+        const value = JSON.parse(event.session);
+        if (
+          value.entries[0]?.finished &&
+          value.syncDetails.history?.phase === 'confirmed'
+        )
+          ownerApplied.resolve(value);
+      },
+      async onRpc(request, runtime, signal) {
+        const { query } = await runtime.openPayload(request.params);
+        if (query.kind === 'watchChanges') {
+          return new Promise((_, reject) =>
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            }),
+          );
+        }
+        if (revision === 2) {
+          ownerRequest.resolve();
+          await ownerRecheck.promise;
+        }
+        return {
+          result: await runtime.sealPayload('s1', {
+            type: 'session/history-read_response',
+            sessionId: 's1',
+            success: true,
+            historyRevision: revision,
+            historyCount: 1,
+            result: {
+              checkpoint: 'c' + revision,
+              startPosition: 0,
+              totalCount: 1,
+              rows: [{ position: 0, state: 'ready', turnId: 'running' }],
+              hasMoreOlder: false,
+              cursor: null,
+            },
+            pageTurns: [
+              {
+                id: 'running',
+                role: 'assistant',
+                finished: revision === 2,
+                timestamp: '2026-01-01T00:00:00Z',
+                items: [],
+              },
+            ],
+          }),
+        };
+      },
+    });
+    t.after(() => {
+      ownerRecheck.resolve();
+      fixture.close();
+    });
+    await onRead.promise;
+    revision = 2;
+    onRead = Promise.withResolvers();
+    fixture.runtime.resumeSessionReads();
+    assert.equal(fixture.events.at(-1).syncDetails.history.phase, 'syncing');
+    const fresh = await onRead.promise;
+    await ownerRequest.promise;
+    onRead = Promise.withResolvers();
+    fresh({
+      ok: true,
+      result: { nextOffset: '1', upToDate: true, closed: false },
+    });
+    await onRead.promise;
+    await fixture.reopen();
+    const waiting = fixture.events.at(-1);
+    assert.equal(waiting.syncDetails.document.phase, 'confirmed');
+    assert.equal(waiting.syncDetails.history.phase, 'syncing');
+    assert.equal(waiting.entries[0].finished, false);
+    ownerRecheck.resolve();
+    assert.equal((await ownerApplied.promise).entries[0].finished, true);
   },
 );
 

@@ -78,7 +78,10 @@ export function createRemoteRoostSessionDataFactory(options: {
       initialPage: Promise<DirectoryPage>;
       unsubscribe: () => void;
     };
-    readLatestDirectoryPage: (limit: number) => Promise<DirectoryPage>;
+    readLatestDirectoryPage: (
+      limit: number,
+      options?: { refresh?: boolean },
+    ) => Promise<DirectoryPage>;
     readOlderDirectoryPage: (
       cursor: string,
       limit: number,

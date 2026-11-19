@@ -215,7 +215,10 @@ export interface SessionHistoryReader {
   /** Bounded commit observation; it owns no database transaction while waiting. */
   waitForChanges?(checkpoint: string, waitMs: number, signal?: AbortSignal): Promise<void>;
   /** Latest bounded directory page for windowed-history backends. */
-  readLatestDirectoryPage?(limit: number): Promise<SessionHistoryDirectoryPage>;
+  readLatestDirectoryPage?(
+    limit: number,
+    options?: { refresh?: boolean }
+  ): Promise<SessionHistoryDirectoryPage>;
   /** Bounded page immediately older than `cursor`. */
   readOlderDirectoryPage?(cursor: string, limit: number): Promise<SessionHistoryDirectoryPage>;
   /**

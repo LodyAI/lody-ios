@@ -288,12 +288,15 @@ const createRoostSessionDataFactoryFromTransport =
     const listeners = new Set<SessionDataChangeListener>();
     const snapshotProvenance = new WeakSet<object>();
 
-    const readOwner = (query: SessionHistoryReadQuery): Promise<SessionHistoryReadResponse> => {
+    const readOwner = (
+      query: SessionHistoryReadQuery,
+      refresh = false
+    ): Promise<SessionHistoryReadResponse> => {
       const incremental = incrementalEnabled();
       if (incremental && (query.kind === 'readLatestPage' || query.kind === 'readOlderPage'))
         query = { ...query, withCheckpoint: true };
       const key = JSON.stringify(query);
-      const pending = pendingReads.get(key);
+      const pending = refresh ? undefined : pendingReads.get(key);
       if (pending) return pending;
       const next = (async () => {
         if (disposed) throw new Error('Roost session bridge is disposed');
@@ -302,6 +305,7 @@ const createRoostSessionDataFactoryFromTransport =
         const revision = response.historyRevision;
         const count = response.historyCount;
         const coherentProgress =
+          !refresh &&
           incremental &&
           (query.kind === 'readChanges' ||
             query.kind === 'watchChanges' ||
@@ -365,11 +369,13 @@ const createRoostSessionDataFactoryFromTransport =
         }
         return response;
       })();
-      pendingReads.set(key, next);
-      void next.then(
-        () => pendingReads.delete(key),
-        () => pendingReads.delete(key)
-      );
+      if (!refresh) {
+        pendingReads.set(key, next);
+        void next.then(
+          () => pendingReads.delete(key),
+          () => pendingReads.delete(key)
+        );
+      }
       return next;
     };
     const readHistory = async (query: SessionHistoryReadQuery): Promise<unknown> =>
@@ -549,12 +555,13 @@ const createRoostSessionDataFactoryFromTransport =
     };
 
     const readDirectorySnapshot = async (
-      query: Extract<SessionHistoryReadQuery, { kind: 'readLatestPage' | 'readOlderPage' }>
+      query: Extract<SessionHistoryReadQuery, { kind: 'readLatestPage' | 'readOlderPage' }>,
+      refresh = false
     ): Promise<{ page: SessionHistoryDirectoryPage; directoryEpoch: number | null }> => {
       const directoryEpoch = observedDirectoryEpoch;
       const before =
         query.kind === 'readOlderPage' ? parseRoostCacheCursor(query.cursor) : undefined;
-      const localHead = await canReadCache();
+      const localHead = refresh ? undefined : await canReadCache();
       if (
         before &&
         localHead &&
@@ -660,7 +667,7 @@ const createRoostSessionDataFactoryFromTransport =
           directoryEpoch,
         };
       }
-      const response = await readOwner(query);
+      const response = await readOwner(query, refresh);
       const page = validateDirectoryPage(response.result, 'Roost history page');
       return {
         page,
@@ -1043,8 +1050,8 @@ const createRoostSessionDataFactoryFromTransport =
       },
       readRange,
       readDirectory,
-      readLatestDirectoryPage: async (limit) =>
-        (await readDirectorySnapshot({ kind: 'readLatestPage', limit })).page,
+      readLatestDirectoryPage: async (limit, options) =>
+        (await readDirectorySnapshot({ kind: 'readLatestPage', limit }, options?.refresh)).page,
       readOlderDirectoryPage: async (cursor, limit) =>
         (await readDirectorySnapshot({ kind: 'readOlderPage', cursor, limit })).page,
       readAll: async () => {
