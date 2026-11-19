@@ -125,6 +125,9 @@ type SessionState = {
   reason?: string;
   syncSince: number;
   streamStarted?: boolean;
+  /** A retained session must finish a read started after its last foreground wake. */
+  streamWake?: AbortController;
+  needsFreshStreamRead?: boolean;
   streamFault?: ReadFault;
   historyFault?: ReadFault;
   pending?: ReturnType<typeof setTimeout>;
@@ -806,10 +809,18 @@ export function traceStalledReads(now = Date.now()) {
     trace(state, 'stalled', { stage: read.stage, ageMs, status: state.status });
   }
 }
-export function traceSessionResume() {
+export function resumeSessionReads() {
   const state = active;
   if (!state) return;
   const read = state.read;
+  if (state.streamWake && state.status !== 'offline') {
+    state.streamWake.abort();
+    state.streamWake = new AbortController();
+    if (!state.needsFreshStreamRead && state.status === 'live')
+      state.syncSince = Date.now();
+    state.needsFreshStreamRead = true;
+    flush(state);
+  }
   trace(state, 'resume', {
     status: state.status,
     ...(read ? { stage: read.stage, ageMs: Date.now() - read.startedAt } : {}),
@@ -937,11 +948,12 @@ function flush(state: SessionState) {
       (state.read?.stalled
         ? { phase: 'syncing', reason: 'timeout' }
         : {
-            phase: state.streamReady
-              ? 'confirmed'
-              : state.streamStarted
-                ? 'syncing'
-                : 'connecting',
+            phase:
+              state.streamReady && !state.needsFreshStreamRead
+                ? 'confirmed'
+                : state.streamStarted
+                  ? 'syncing'
+                  : 'connecting',
           }),
     history:
       state.target?.backend === 'roost'
@@ -968,7 +980,7 @@ function flush(state: SessionState) {
   state.emit({
     type: active === state ? 'session' : 'sessionCache',
     sessionId: state.id,
-    synced: state.status === 'live',
+    synced: state.status === 'live' && !state.needsFreshStreamRead,
     backgroundWork: backgroundProgress(state),
     session,
   });
@@ -1295,11 +1307,17 @@ export async function openSession(
       state.streamFault = undefined;
       event('syncing');
       let size = 0;
+      let missingUpdates = false;
       const consume = (bytes: Uint8Array, snapshot = false) => {
         size += bytes.length;
         if (size > 32 * 1024 * 1024) throw new Error('session_limit');
-        if (snapshot) state.doc.import(unpack(bytes));
-        else importUpdates(state.doc, bytes);
+        const result = snapshot
+          ? state.doc.import(unpack(bytes))
+          : state.doc.importBatch(decodeFrames(bytes));
+        // An import can accept bytes and still leave their operations waiting
+        // for dependencies. Check the retained backlog after later imports.
+        if (result.pending?.size || missingUpdates)
+          missingUpdates = state.doc.exportPendingUpdates() !== undefined;
         state.roostReader?.wake();
       };
       if (data.snapshotOffset !== '-1' && data.snapshot)
@@ -1366,7 +1384,8 @@ export async function openSession(
       if (!target) throw new Error('metadata_not_ready');
       if (sessions.get(id) !== state) return;
       state.target = target;
-      state.streamReady = upToDate;
+      state.streamWake = new AbortController();
+      state.streamReady = upToDate && !missingUpdates;
       state.streamFault = undefined;
       if (target.backend === 'roost') {
         event('syncing');
@@ -1485,7 +1504,7 @@ export async function openSession(
       pages = 0;
       let changed = true;
       while (!controller.signal.aborted) {
-        state.streamReady = upToDate;
+        state.streamReady = upToDate && !missingUpdates;
         updateReadiness();
         if (upToDate) {
           if (changed || state.status !== 'live')
@@ -1498,21 +1517,30 @@ export async function openSession(
         }
         const next = await retrySessionRead(
           controller.signal,
-          () =>
-            readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
-              const result = await state.client.readOnce({
-                offset,
-                cursor,
-                signal: controller.signal,
-                ...(upToDate ? { live: 'long-poll' as const } : {}),
-              });
-              if (!result.ok) throw new Error(result.result.code);
-              if (state.read?.stalled) changed = true;
-              return result;
-            }),
+          () => {
+            const wake = state.streamWake!;
+            const live = upToDate && !state.needsFreshStreamRead;
+            return readAttempt(state, live ? 'poll' : 'catchup', async () => {
+              try {
+                const result = await state.client.readOnce({
+                  offset,
+                  cursor,
+                  signal: AbortSignal.any([controller.signal, wake.signal]),
+                  ...(live ? { live: 'long-poll' as const } : {}),
+                });
+                if (wake.signal.aborted) return;
+                if (!result.ok) throw new Error(result.result.code);
+                if (state.read?.stalled) changed = true;
+                return { result: result.result, wake };
+              } catch (error) {
+                if (!wake.signal.aborted) throw error;
+              }
+            });
+          },
           retryStream,
         );
         if (sessions.get(id) !== state) return;
+        if (!next || next.wake.signal.aborted) continue;
         if (next.result.payload) {
           consume(next.result.payload.body);
           changed = true;
@@ -1522,10 +1550,17 @@ export async function openSession(
         offset = next.result.nextOffset;
         cursor = next.result.cursor;
         upToDate = next.result.upToDate;
+        if (state.needsFreshStreamRead) changed = true;
+        state.needsFreshStreamRead = false;
         if (next.result.closed) throw new Error('stream_closed');
         state.streamFault = undefined;
-        if (!next.result.payload?.body.length && upToDate)
+        if (!next.result.payload?.body.length && upToDate) {
+          // Publish the applied tail before pacing an empty poll.
+          state.streamReady = !missingUpdates;
+          updateReadiness();
+          event(state.ready ? 'live' : 'syncing');
           await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
       }
     } catch (error) {
       const failed = error instanceof Error ? error : new Error('sync_failed');

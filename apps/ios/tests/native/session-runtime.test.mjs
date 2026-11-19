@@ -242,6 +242,78 @@ test(
   },
 );
 
+test(
+  'a retained session waits for a new foreground read and for pending Loro updates',
+  { timeout: 5000 },
+  async (t) => {
+    const nextRead = Promise.withResolvers();
+    let onRead = nextRead.resolve;
+    const fixture = await openTestSession({
+      seedServer(doc) {
+        doc.getList('history').push({ id: 'old', role: 'user', items: [] });
+        doc.commit();
+      },
+      readSession(options) {
+        const response = Promise.withResolvers();
+        const call = { options, reply: response.resolve };
+        onRead(call);
+        // Deliberately deliver a stale success even after its signal aborts.
+        return response.promise;
+      },
+    });
+    t.after(() => fixture.close());
+    const initial = await nextRead.promise;
+    const check = (phase, ids) => {
+      const last = fixture.events.at(-1);
+      assert.equal(last.syncDetails.document.phase, phase);
+      if (ids)
+        assert.deepEqual(
+          last.entries.map((row) => row.id),
+          ids,
+        );
+    };
+    const advance = async (call, nextOffset, bytes) => {
+      const next = Promise.withResolvers();
+      onRead = next.resolve;
+      call.reply({
+        ok: true,
+        result: {
+          nextOffset,
+          upToDate: true,
+          closed: false,
+          payload: { body: frame(bytes) },
+        },
+      });
+      return next.promise;
+    };
+    const add = (id) => {
+      const from = fixture.server.version();
+      fixture.server
+        .getList('history')
+        .push({ id, role: 'assistant', finished: true, items: [] });
+      fixture.server.commit();
+      return fixture.server.export({ mode: 'update', from });
+    };
+
+    check('confirmed', ['old']);
+    const first = add('dependency');
+    const second = add('new');
+    fixture.runtime.resumeSessionReads();
+    assert.equal(initial.options.signal.aborted, true);
+    check('syncing', ['old']);
+    const validating = await advance(initial, '2', first);
+    assert.equal(validating.options.live, undefined);
+    check('syncing', ['old']);
+    const next = await advance(validating, '3', second);
+    await fixture.reopen();
+    check('syncing', ['old']);
+    assert.equal(next.options.offset, '3');
+    await advance(next, '4', first);
+    await fixture.reopen();
+    check('confirmed', ['old', 'dependency', 'new']);
+  },
+);
+
 test('Roost sessions read, observe and send through the owning machine', async () => {
   const turn = (text) => ({
     id: 'old',

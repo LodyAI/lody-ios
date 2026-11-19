@@ -96,7 +96,7 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
             contents: `
         export const openSession = (...args) => { globalThis.__target = args[6]; };
         export const ensureSession = () => {}, closeSession = () => {}, loadOlderSession = () => {}, releaseReserve = () => {},
-          traceSessionResume = () => {}, traceStalledReads = () => {},
+          resumeSessionReads = () => {}, traceStalledReads = () => {},
           startAcceptedInputs = () => {}, resumeAcceptedInputs = () => {}, stopSessions = () => {};
       `,
           }));
