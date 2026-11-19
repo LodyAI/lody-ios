@@ -12,6 +12,7 @@ import {
   setSessionTraceSink,
   setSessionUsageReader,
   refreshSessionUsage,
+  updateActiveSessionPresence,
 } from './session';
 import { machineRpc } from './machine-rpc';
 import { retrySessionRead } from './session-read';
@@ -119,10 +120,21 @@ const { machineReplicas, catalogs, unhealthy } = state;
 let stopPresence: (() => void) | undefined;
 function startPresence() {
   stopPresence?.();
-  stopPresence = watchMachinePresence(state.workspace, getGrant, (value) => {
-    state.presence = value;
-    channel.emit('machinePresence', value);
-  });
+  const { workspace, userId } = state;
+  const isCurrent = () =>
+    state.workspace === workspace && state.userId === userId;
+  stopPresence = watchMachinePresence(
+    workspace,
+    getGrant,
+    (value) => {
+      if (!isCurrent()) return;
+      state.presence = value;
+      channel.emit('machinePresence', value);
+    },
+    (ids) => {
+      if (isCurrent()) updateActiveSessionPresence(ids);
+    },
+  );
 }
 
 async function markDispatch(sessionId: string, turnId: string, queued = false) {

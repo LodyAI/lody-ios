@@ -314,7 +314,7 @@ extension LodyChatView {
       projected,
       inFlight: Set(projected.map(\.entryID).filter { ChatSendHandoff.isInFlight(id: $0) })
     )
-    if syncExecutionUnconfirmed {
+    if syncExecutionUnconfirmed || hasActivePresence == false {
       for index in projected.indices where projected[index].kind == "duration" && projected[index].running {
         projected[index].running = false
         projected[index].symbol = "exclamationmark.circle"

@@ -303,6 +303,20 @@ private final class SessionPreviewFixture {
       object["entries"] = entries
       session = SessionController.json(object)
     }
+    if ["stale-work", "active-work", "syncing-work"].contains(bar), let data = session?.data(using: .utf8),
+       var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       var entries = object["entries"] as? [[String: Any]] {
+      entries[0]["timestamp"] = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-120))
+      entries[1]["finished"] = false
+      entries[1]["status"] = "processing"
+      entries[1].removeValue(forKey: "endedAt")
+      entries[1]["items"] = [["itemId": "reply", "type": "text", "text": "Reply before the final update arrives."]]
+      object["entries"] = entries
+      object["hasActivePresence"] = bar != "stale-work"
+      let phase = bar == "syncing-work" ? "syncing" : "confirmed"
+      object["syncDetails"] = ["since": Date().timeIntervalSince1970 * 1000, "document": ["phase": phase]]
+      session = SessionController.json(object)
+    }
     if bar == "sync-flow", let data = session?.data(using: .utf8),
        var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
       object["syncDetails"] = [

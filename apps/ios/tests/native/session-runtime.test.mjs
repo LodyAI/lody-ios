@@ -38,6 +38,48 @@ test('an existing legacy Loro history opens while session metadata is unavailabl
   }
 });
 
+test('session presence can stop the live timer before the final transcript update arrives', async () => {
+  const fixture = await openTestSession({
+    seedServer(doc) {
+      doc.getList('history').push({
+        id: 'assistant-draft',
+        role: 'assistant',
+        finished: false,
+        items: [{ type: 'text', text: 'A partially received reply' }],
+      });
+      doc.commit();
+    },
+  });
+  try {
+    const { events, runtime } = fixture;
+    const initial = events.at(-1);
+    assert.equal(initial.status, 'live');
+    assert.equal(initial.hasActivePresence, false);
+    runtime.updateActiveSessionPresence(new Set(['another-session']));
+    assert.equal(events.at(-1), initial);
+
+    runtime.updateActiveSessionPresence(new Set(['s1']));
+    const active = events.at(-1);
+    assert.equal(active.hasActivePresence, true);
+    assert.deepEqual(active.entries, initial.entries);
+    runtime.updateActiveSessionPresence(new Set(['s1']));
+    assert.equal(
+      events.at(-1),
+      active,
+      'a heartbeat for the same active session does not resend its transcript',
+    );
+
+    runtime.updateActiveSessionPresence(new Set());
+    const ended = events.at(-1);
+    assert.equal(ended.hasActivePresence, false);
+    assert.ok(ended.revision > active.revision);
+    assert.deepEqual(ended.entries, active.entries);
+    assert.equal(ended.entries[0].finished, false);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('control stream catchup happens before choosing a legacy history backend', async () => {
   let caughtUp = false;
   const reads = [];

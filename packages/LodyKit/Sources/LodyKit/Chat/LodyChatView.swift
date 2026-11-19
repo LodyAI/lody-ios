@@ -91,6 +91,9 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   var syncExecutionUnconfirmed = false {
     didSet { if oldValue != syncExecutionUnconfirmed { scheduleUpdate() } }
   }
+  var hasActivePresence: Bool? {
+    didSet { if oldValue != hasActivePresence { scheduleUpdate() } }
+  }
   var onRetrySend: ([String: Any]) -> Void = { _ in }
   var onTitlePress: ([String: Any]) -> Void = { _ in }
   var onPreview: ([String: Any]) -> Void = { _ in }
