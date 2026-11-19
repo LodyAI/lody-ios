@@ -28,7 +28,7 @@ final class HomeTabsController: UITabBarController, UITabBarControllerDelegate {
   var onSelect: (HomeTab) -> Void = { _ in }
   var onCreate: () -> Void = {}
   var onDebug: () -> Void = {}
-  var canCreate = false { didSet { tab(forIdentifier: Self.createID)?.isEnabled = canCreate } }
+  var canCreate = false { didSet { if #available(iOS 18.4, *) { tab(forIdentifier: Self.createID)?.isEnabled = canCreate } } }
   private static let createID = "home-new-session"
   private var homeTabs: [UITab] = []
 
@@ -36,7 +36,7 @@ final class HomeTabsController: UITabBarController, UITabBarControllerDelegate {
     super.viewDidLoad()
     delegate = self
     mode = .tabBar
-    tabBarMinimizeBehavior = .onScrollDown
+    if #available(iOS 26.0, *) { tabBarMinimizeBehavior = .onScrollDown }
     tabBar.tintColor = LodyUIColor.accentFg
     tabBar.unselectedItemTintColor = LodyUIColor.iconSecondary
     tabBar.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:))))
@@ -63,7 +63,7 @@ final class HomeTabsController: UITabBarController, UITabBarControllerDelegate {
 
   func show(_ destination: HomeTab) {
     selectedTab = tab(forIdentifier: "home-tab-\(destination)")
-    tabBarMinimizeBehavior = destination == .chats ? .onScrollDown : .never
+    if #available(iOS 26.0, *) { tabBarMinimizeBehavior = destination == .chats ? .onScrollDown : .never }
     updateCreate(destination)
   }
 
@@ -81,7 +81,7 @@ final class HomeTabsController: UITabBarController, UITabBarControllerDelegate {
 
   func tabBarController(_ tabBarController: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
     guard let destination = HomeTab.allCases.first(where: { selectedTab.identifier == "home-tab-\($0)" }) else { return }
-    tabBarMinimizeBehavior = destination == .chats ? .onScrollDown : .never
+    if #available(iOS 26.0, *) { tabBarMinimizeBehavior = destination == .chats ? .onScrollDown : .never }
     updateCreate(destination)
     onSelect(destination)
   }
