@@ -54,5 +54,7 @@ Read before changing the conversation page: the transcript and its turns, header
   from the waiting or interruption banner. Each diagram names the source, any
   relay and the receiving device, with arrows in the direction conversation data
   flows. The session stream and Roost owner history have separate statuses. Retained turns remain visible
-  while a path is unconfirmed; they show execution status as unconfirmed
-  and pause the live indicator until the current subscription catches up.
+  while a path is unconfirmed. A live work timer requires a caught-up
+  subscription and fresh session Presence. A Presence update can pause the
+  timer and show an unconfirmed execution status while retaining the same reply.
+  The workspace Presence subscription supplies this signal to the session feed.

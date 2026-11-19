@@ -47,6 +47,7 @@ test('presence reconnects a stalled join, expires heartbeats and fences replaced
   const { watchMachinePresence } =
     await import('../../../../packages/cloud-runtime/src/runtime/machine-presence.ts');
   const events = [];
+  const activeSessions = [];
   const stop = watchMachinePresence(
     'w',
     async () => ({
@@ -54,6 +55,7 @@ test('presence reconnects a stalled join, expires heartbeats and fences replaced
       gatewayBaseUrl: 'https://example.invalid',
     }),
     (value) => events.push(value),
+    (ids) => activeSessions.push([...ids]),
   );
   t.after(stop);
   const flush = async () => {
@@ -88,13 +90,42 @@ test('presence reconnects a stalled join, expires heartbeats and fences replaced
   };
   room.status('joined');
   assert.deepEqual(events.at(-1), { state: 'live', onlineMachineIds: ['a'] });
+  assert.deepEqual(activeSessions.at(-1), []);
+
+  const running = {
+    kind: 'session',
+    sessionId: 's1',
+    machineId: 'a',
+    instanceId: 'one',
+    updatedAt: Date.now(),
+    status: { type: 'running' },
+  };
+  room.store.states.session = running;
+  room.store.listener();
+  assert.deepEqual(activeSessions.at(-1), ['s1']);
+  delete room.store.states.session;
+  room.store.listener();
+  assert.deepEqual(activeSessions.at(-1), []);
+  assert.deepEqual(events.at(-1), { state: 'live', onlineMachineIds: ['a'] });
+
+  room.store.states.session = running;
+  room.store.listener();
   t.mock.timers.tick(90_000);
+  assert.deepEqual(
+    activeSessions.at(-1),
+    [],
+    'expired session presence cannot keep the timer alive',
+  );
   assert.deepEqual(
     events.at(-1),
     { state: 'live', onlineMachineIds: [] },
     'registration and old heartbeats cannot keep a machine online',
   );
+  room.store.states.session = { ...running, updatedAt: Date.now() };
+  room.store.listener();
+  assert.deepEqual(activeSessions.at(-1), ['s1']);
   room.status('reconnecting');
+  assert.deepEqual(activeSessions.at(-1), []);
   assert.equal(
     events.at(-1).state,
     'unknown',

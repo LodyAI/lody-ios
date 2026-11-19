@@ -21,6 +21,7 @@ struct SessionRuntimeEvent: Sendable {
 struct SessionFeedState: Equatable, Sendable {
   var status = "syncing"
   var syncDetails: ConversationSyncDetails?
+  var hasActivePresence: Bool?
   var revision = -1
   var overflow = false
   var entriesJSON = "[]"
@@ -184,7 +185,8 @@ final class SessionFeed {
       received = true
       awaitingSnapshot = false
       state = SessionFeedState(
-        status: "live", syncDetails: envelope.syncDetails, revision: revision, entriesJSON: envelope.entriesJSON,
+        status: "live", syncDetails: envelope.syncDetails, hasActivePresence: envelope.hasActivePresence,
+        revision: revision, entriesJSON: envelope.entriesJSON,
         billableTurnCount: envelope.billableTurnCount, historyHasMore: envelope.historyHasMore,
         historyLoading: envelope.historyLoading, composerJSON: envelope.composerJSON, usageJSON: envelope.usageJSON, preview: envelope.preview, transcript: envelope.transcript
       )

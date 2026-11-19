@@ -182,6 +182,18 @@ let active: SessionState | undefined;
 // Working sessions use visit order; idle visits never enter the background LRU.
 const sessions = new Map<string, SessionState>();
 const reserved = new Set<string>();
+let activePresenceSessions: ReadonlySet<string> = new Set();
+
+/** Presence may change while the transcript stream is quiet. */
+export function updateActiveSessionPresence(ids: ReadonlySet<string>) {
+  const previous = activePresenceSessions;
+  activePresenceSessions = ids;
+  for (const state of sessions.values()) {
+    if (state.status === 'live' && previous.has(state.id) !== ids.has(state.id))
+      flush(state);
+  }
+}
+
 let acceptedInputs:
   ReturnType<typeof createWorkspaceAcceptedInputs> | undefined;
 
@@ -953,7 +965,8 @@ function flush(state: SessionState) {
           })
         : undefined,
   };
-  let session = JSON.stringify({ ...snapshot, syncDetails });
+  const hasActivePresence = activePresenceSessions.has(state.id);
+  let session = JSON.stringify({ ...snapshot, syncDetails, hasActivePresence });
   // A window of long turns can still exceed the host limit: keep the newest
   // half of its turns until it fits or one turn remains. Older history then
   // stays unavailable, because loading it would exceed the limit again.
@@ -963,7 +976,7 @@ function flush(state: SessionState) {
     start = pageStart(history, history.length, Math.ceil(turns / 2));
     state.historyClipped = true;
     snapshot = finish(project());
-    session = JSON.stringify({ ...snapshot, syncDetails });
+    session = JSON.stringify({ ...snapshot, syncDetails, hasActivePresence });
   }
   state.emit({
     type: active === state ? 'session' : 'sessionCache',
@@ -1113,6 +1126,7 @@ export function stopSessions() {
   sessions.clear();
   reserved.clear();
   active = undefined;
+  activePresenceSessions = new Set();
 }
 export function unpack(bytes: Uint8Array) {
   return bytes[0] === 0x28 &&

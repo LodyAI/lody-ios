@@ -28,6 +28,7 @@ struct SessionEnvelope: Sendable {
   var revision: Int?
   var status = ""
   var syncDetails: ConversationSyncDetails?
+  var hasActivePresence: Bool?
   var overflow = false
   var entriesJSON = "[]"
   var billableTurnCount: Int?
@@ -44,6 +45,7 @@ struct SessionEnvelope: Sendable {
       version: (object["v"] as? NSNumber)?.intValue, revision: (object["revision"] as? NSNumber)?.intValue,
       status: object["status"] as? String ?? "", overflow: object["overflow"] as? Bool == true
     )
+    envelope.hasActivePresence = object["hasActivePresence"] as? Bool
     if let syncDetails = object["syncDetails"] as? [String: Any],
        let data = try? JSONSerialization.data(withJSONObject: syncDetails) {
       envelope.syncDetails = try? JSONDecoder().decode(ConversationSyncDetails.self, from: data)

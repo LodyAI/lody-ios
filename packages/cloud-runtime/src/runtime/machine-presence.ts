@@ -55,6 +55,37 @@ export function onlineMachines(
   return [...ids].sort();
 }
 
+function freshActiveSessions(states: Record<string, unknown>, now: number) {
+  const ids = new Set<string>();
+  for (const value of Object.values(states)) {
+    if (!value || typeof value !== 'object') continue;
+    const entry = value as Record<string, unknown>;
+    if (
+      entry.kind !== 'session' ||
+      typeof entry.sessionId !== 'string' ||
+      !entry.sessionId ||
+      typeof entry.machineId !== 'string' ||
+      !entry.machineId ||
+      typeof entry.instanceId !== 'string' ||
+      !entry.instanceId ||
+      typeof entry.updatedAt !== 'number' ||
+      !Number.isFinite(entry.updatedAt) ||
+      now - entry.updatedAt >= machinePresenceTTL
+    )
+      continue;
+    const status = entry.status;
+    if (!status || typeof status !== 'object') continue;
+    const type = (status as Record<string, unknown>).type;
+    if (
+      type === 'running' ||
+      type === 'initializing' ||
+      type === 'requestPermission'
+    )
+      ids.add(entry.sessionId);
+  }
+  return ids;
+}
+
 type Grant = {
   token: string;
   gatewayBaseUrl: string;
@@ -75,6 +106,7 @@ export function watchMachinePresence(
   workspace: string,
   getGrant: () => Promise<Grant>,
   publish: (value: MachinePresence) => void,
+  publishActiveSessions: (ids: ReadonlySet<string>) => void,
 ) {
   let stopped = false;
   let generation = 0;
@@ -87,7 +119,10 @@ export function watchMachinePresence(
     last = next;
     publish(value);
   };
-  const unknown = () => emit({ state: 'unknown', onlineMachineIds: [] });
+  const unknown = () => {
+    emit({ state: 'unknown', onlineMachineIds: [] });
+    publishActiveSessions(new Set());
+  };
   const start = async () => {
     const version = ++generation;
     close();
@@ -104,11 +139,14 @@ export function watchMachinePresence(
       let joined = false;
       let disconnectedAt = Date.now();
       const emitSnapshot = () => {
-        if (!stopped && version === generation && joined)
-          emit({
-            state: 'live',
-            onlineMachineIds: onlineMachines(store.getAllStates(), Date.now()),
-          });
+        if (stopped || version !== generation || !joined) return;
+        const states = store.getAllStates();
+        const now = Date.now();
+        emit({
+          state: 'live',
+          onlineMachineIds: onlineMachines(states, now),
+        });
+        publishActiveSessions(freshActiveSessions(states, now));
       };
       const detach = store.subscribe(emitSnapshot);
       const tick = setInterval(() => {

@@ -310,6 +310,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     let unconfirmed = state.status != "live" || state.overflow || state.syncDetails.map { $0.phase != .confirmed } == true
     if unconfirmed && !chat.syncExecutionUnconfirmed { syncFallbackSince = Date() }
     chat.syncExecutionUnconfirmed = unconfirmed
+    chat.hasActivePresence = state.hasActivePresence
     syncDetailsPage?.rootView = makeSyncDetailsView(state)
     renderComposer(session, state)
     renderPermission()

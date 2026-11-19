@@ -89,6 +89,37 @@ def check_sync_flow():
     ui.capture('sync-diagram')
 
 
+def check_work_confirmation():
+    expected = catalog.text('chat.sync.executionUnconfirmed')
+    working = catalog.text('native.chat.transcript.status.workingFor').split('%', 1)[0].strip()
+
+    def current_duration(items):
+        # Debug links can stack session sheets. The last matching row belongs
+        # to the foreground sheet in the accessibility tree.
+        row = next((i for i in reversed(items) if i.get('AXUniqueId') == 'preview-user:duration'), {})
+        return spoken(row)
+
+    for case in ('stale-work', 'active-work', 'syncing-work'):
+        ui.open_case(f'session-preview-{case}')
+        wait_probe('live', f'{case} fixture did not deliver the transcript')
+        wait_text('Reply before the final update arrives.')
+        if case == 'active-work':
+            ui.wait(lambda items: working in current_duration(items), 'Fresh session presence did not permit the timer')
+        else:
+            if case == 'syncing-work':
+                ui.element('chat-overlay-status')
+            ui.wait(
+                lambda items: expected in current_duration(items),
+                f'{case} did not replace the timer with an unconfirmed status',
+            )
+        ui.capture(case)
+
+if os.environ.get('LODY_VERIFY_SESSION_WORK_ONLY') == '1':
+    check_work_confirmation()
+    print('PASS: the native timer follows the current session presence and sync state, with the reply retained')
+    sys.exit(0)
+
+
 if os.environ.get('LODY_VERIFY_SESSION_SYNC_ONLY') == '1':
     check_sync_flow()
     print('PASS: the session sync diagrams expose the source, relay and receiver for conversation data and the history failure')
@@ -251,6 +282,7 @@ ui.open_case('session-preview-find')
 ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-find-field' and 'needle' in (i.get('AXValue') or '') for i in items), 'Find query did not open the find bar')
 ui.capture('find-query')
 
+check_work_confirmation()
 check_sync_flow()
 
 print('PASS: native session page renders cached then live history, title and header actions (copy submenu, rename, change owner), find, deletion return, offline reconnect and an incoming find query.')
