@@ -57,11 +57,11 @@ const row = (id, patch = {}) => ({
   updatedAt: 1,
   ...patch,
 });
-function catalog() {
+function catalog(machineIds = ['m1', 'm2']) {
   const remote = new Flock(`role-${crypto.randomUUID()}`),
     meta = new Flock('meta');
   const machines = new Map(
-    ['m1', 'm2'].map((machineId, i) => {
+    machineIds.map((machineId, i) => {
       const flock = new Flock(machineId);
       flock.set(['agentConfig', `a${i + 1}`], {
         id: `a${i + 1}`,
@@ -315,6 +315,135 @@ test('editing shared fields preserves v2 targets, memory, future fields and froz
     }),
   );
 });
+test('switching an inline target persists the new agent and preserves the role memory', async () => {
+  const c = catalog();
+  const memory = { providerId: 'p', memoryId: 'mem' };
+  c.put('review', {
+    alias: 'Studio-review',
+    runConfig: { modelId: 'old', modeId: 'plan', memory },
+  });
+  const [base] = (await c.list()).roles;
+  const request = {
+    action: 'save',
+    id: base.id,
+    base,
+    fields: fields(base.name),
+    targetChanges: [
+      { fromMachineId: 'm1', machineId: 'm2', agentConfigId: 'a2' },
+    ],
+  };
+  await c.call(request);
+  const saved = c.remote.get(['agentRole', base.id]);
+  assert.equal(saved.v, 1);
+  assert.equal(saved.machineId, 'm2');
+  assert.equal(saved.agentConfigId, 'a2');
+  assert.equal(saved.alias, 'Studio-review');
+  assert.equal(saved.revision, 2);
+  assert.deepEqual(saved.runConfig, { memory });
+  const [readback] = (await c.list()).roles;
+  assert.equal(readback.targets[0].agentConfigId, 'a2');
+  await assert.rejects(c.call(request), /role_conflict/);
+  assert.equal(c.writes(), 1);
+});
+
+test('switches in v2 and legacy additional targets preserve the other binding', async () => {
+  for (const v of [1, 2]) {
+    const c = catalog();
+    const first = {
+      machineId: 'm1',
+      agentConfigId: 'a1',
+      runConfig: { modelId: 'keep' },
+    };
+    const second = {
+      machineId: 'm2',
+      agentConfigId: 'removed',
+      runConfig: { modeId: 'old' },
+      future: 'keep',
+    };
+    c.put(
+      'multi',
+      v === 1
+        ? { ...first, additionalTargets: [second] }
+        : { v, targets: [first, second] },
+    );
+    const [base] = (await c.list()).roles;
+    const request = {
+      action: 'save',
+      id: base.id,
+      base,
+      fields: fields(base.name),
+    };
+    for (const [machineId, agentConfigId, error] of [
+      ['m1', 'a1', /role_invalid/],
+      ['m2', 'removed-again', /role_target_unavailable/],
+    ]) {
+      await assert.rejects(
+        c.call({
+          ...request,
+          targetChanges: [{ fromMachineId: 'm2', machineId, agentConfigId }],
+        }),
+        error,
+      );
+    }
+    assert.equal(c.writes(), 0);
+    await c.call({
+      ...request,
+      targetChanges: [
+        { fromMachineId: 'm2', machineId: 'm2', agentConfigId: 'a2' },
+      ],
+    });
+    const saved = c.remote.get(['agentRole', base.id]);
+    assert.equal(saved.v, v);
+    const [storedFirst, storedSecond] =
+      v === 1 ? [saved, ...saved.additionalTargets] : saved.targets;
+    assert.deepEqual(storedFirst.runConfig, first.runConfig);
+    assert.deepEqual(storedSecond, {
+      ...second,
+      agentConfigId: 'a2',
+      runConfig: {},
+    });
+    assert.equal(c.writes(), 1);
+  }
+});
+
+test('moving two bindings rejects a hidden binding even when its agent matches the destination', async () => {
+  for (const v of [1, 2]) {
+    const c = catalog(['m1', 'm2', 'm3']);
+    const first = { machineId: 'm1', agentConfigId: 'a1' };
+    const hidden = { ...first, alias: 'Old', runConfig: { modelId: 'old' } };
+    const second = {
+      machineId: 'm2',
+      agentConfigId: 'a2',
+      alias: 'Current',
+      runConfig: { memory: { providerId: 'p', memoryId: 'mem' } },
+    };
+    c.put(
+      'multi',
+      v === 1
+        ? { ...first, additionalTargets: [hidden, second] }
+        : { v, targets: [first, hidden, second] },
+    );
+    const [base] = (await c.list()).roles;
+    assert.equal(base.targets.length, 2);
+    const stored = c.remote.get(['agentRole', base.id]);
+    await assert.rejects(
+      c.call({
+        action: 'save',
+        id: base.id,
+        base,
+        fields: fields(base.name),
+        targetChanges: [
+          { fromMachineId: 'm1', machineId: 'm3', agentConfigId: 'a3' },
+          { fromMachineId: 'm2', machineId: 'm1', agentConfigId: 'a1' },
+        ],
+      }),
+      /role_invalid/,
+    );
+    assert.equal(c.writes(), 0);
+    assert.deepEqual(c.remote.get(['agentRole', base.id]), stored);
+  }
+});
+
 test('only the owner can mutate; private and forged bases do not bypass discovery or write grants', async () => {
   const c = catalog();
   c.put('shared', { visibility: 'workspace', ownerUserId: 'other' });

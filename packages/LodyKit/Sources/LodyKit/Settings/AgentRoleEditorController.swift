@@ -19,6 +19,8 @@ final class AgentRoleEditorController: LodyFormController {
   private let readOnly: Bool
   private let id: String
   private var target: AgentRoleAgent?
+  private var draftTargets: [AgentRoleTarget]
+  private var targetRows: [(row: LodyFormRow, button: UIButton)] = []
   private var emoji: String
   private var busy = false
   private var uncertain = false
@@ -37,7 +39,7 @@ final class AgentRoleEditorController: LodyFormController {
   )
   private lazy var shared = LodyFormToggle(id: "role-shared", title: text("workspace"), isOn: role?.visibility == .workspace)
   private lazy var machineButton = LodyFormButton.make(id: "role-machine", title: "") { [weak self] in self?.pickMachine() }
-  private lazy var targetButton = LodyFormButton.make(id: "role-target", title: "") { [weak self] in self?.pickTarget() }
+  private let targetButton = UIButton.lodyFormPicker("role-target")
   private lazy var deleteButton = LodyFormButton.make(id: "role-delete", title: text("delete"), destructive: true) {
     [weak self] in self?.confirmDelete()
   }
@@ -50,15 +52,17 @@ final class AgentRoleEditorController: LodyFormController {
     [weak self] in self?.mutate()
   }
 
-  init(workspace: SettingsWorkspace, scope: SettingsScope, role: AgentRole?, agents: [AgentRoleAgent], service: @escaping AgentRoleService) {
+  init(workspace: SettingsWorkspace, scope: SettingsScope, role: AgentRole?, agents: [AgentRoleAgent], writesEnabled: Bool,
+       service: @escaping AgentRoleService) {
     self.workspace = workspace
     self.scope = scope
     self.role = role
     self.agents = agents
     self.service = service
-    readOnly = role.map { !AgentRoleSections.editable($0, userId: workspace.userId) } ?? false
+    readOnly = !writesEnabled || (role.map { !AgentRoleSections.editable($0, userId: workspace.userId) } ?? false)
     id = role?.id ?? UUID().uuidString.lowercased()
     target = agents.first
+    draftTargets = role?.targets ?? []
     emoji = role?.emoji ?? AgentRoleSections.defaultEmoji
     super.init(nibName: nil, bundle: nil)
     title = text(role == nil ? "add" : "edit")
@@ -87,9 +91,10 @@ final class AgentRoleEditorController: LodyFormController {
     }
     stack.addArrangedSubview(errorView)
     stack.addArrangedSubview(LodyFormGroup(name, summary))
-    stack.addArrangedSubview(LodyFormGroup(
-      header: text("target"), footer: role == nil ? text("configurationHint") : nil, targetContent()
-    ))
+    var targetHint: String?
+    if role == nil { targetHint = text("configurationHint") }
+    else if !readOnly { targetHint = text("switchAgentHint") }
+    stack.addArrangedSubview(LodyFormGroup(header: text("target"), footer: targetHint, targetContent()))
     stack.addArrangedSubview(LodyFormGroup(footer: text("visibilityHint"), shared))
     stack.addArrangedSubview(LodyFormGroup(header: text("prompt"), footer: text("effectHint"), prompt))
     if role != nil, !readOnly { stack.addArrangedSubview(LodyFormGroup(deleteButton)) }
@@ -137,6 +142,7 @@ final class AgentRoleEditorController: LodyFormController {
   private func targetContent() -> UIView {
     guard let role else {
       // New chat's order: the computer first, then one of its Agent configs.
+      targetButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
       let rows = UIStackView(arrangedSubviews: [
         LodyFormRow(label: String(localized: "create.label.machine", bundle: .lody), content: machineButton, picker: true),
         LodyFormGroup.hairline(),
@@ -150,6 +156,15 @@ final class AgentRoleEditorController: LodyFormController {
     rows.axis = .vertical
     rows.spacing = 0
     for (index, item) in role.targets.enumerated() {
+      if index > 0 { rows.addArrangedSubview(LodyFormGroup.hairline()) }
+      if !readOnly {
+        let button = UIButton.lodyFormPicker("role-bound-agent-\(index)")
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        let row = LodyFormRow(label: item.machineName, content: button, picker: true)
+        targetRows.append((row, button))
+        rows.addArrangedSubview(row)
+        continue
+      }
       let title = UILabel()
       title.font = .preferredFont(forTextStyle: .body)
       title.adjustsFontForContentSizeCategory = true
@@ -173,7 +188,6 @@ final class AgentRoleEditorController: LodyFormController {
       row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: LodyFormGroup.margin, bottom: 10, trailing: LodyFormGroup.margin)
       row.isAccessibilityElement = true
       row.accessibilityLabel = "\(item.agentName), \(detail.text ?? "")"
-      if index > 0 { rows.addArrangedSubview(LodyFormGroup.hairline()) }
       rows.addArrangedSubview(row)
     }
     rows.accessibilityIdentifier = "role-targets"
@@ -182,6 +196,7 @@ final class AgentRoleEditorController: LodyFormController {
 
   private var scopeValid: Bool { scope.current().key == workspace.key }
   private var valid: Bool { !name.trimmed.isEmpty && (role != nil || target != nil) }
+  private var editable: Bool { !readOnly && !busy && !uncertain && scopeValid }
 
   private func checkScope() {
     if !scopeValid { closeForm() }
@@ -189,13 +204,11 @@ final class AgentRoleEditorController: LodyFormController {
 
   private func render() {
     guard isViewLoaded else { return }
-    let editable = !readOnly && !busy && !uncertain && scopeValid
     name.isEnabled = editable
     summary.isEnabled = editable
     prompt.isEditable = editable
     shared.toggle.isEnabled = editable
     machineButton.isEnabled = editable
-    targetButton.isEnabled = editable
     deleteButton.isEnabled = editable
     emojiButton.isEnabled = editable
     emojiHint.isHidden = !editable
@@ -205,8 +218,36 @@ final class AgentRoleEditorController: LodyFormController {
     emojiButton.accessibilityLabel = String.localizedStringWithFormat(text("emojiLabel"), emoji)
     machineButton.setTitle(target?.machineName ?? String(localized: "create.row.selectMachine", bundle: .lody), for: .normal)
     machineButton.accessibilityLabel = machineButton.title(for: .normal)
-    targetButton.setTitle(target?.name ?? String(localized: "create.row.selectAgent", bundle: .lody), for: .normal)
-    targetButton.accessibilityLabel = targetButton.title(for: .normal)
+    if role == nil {
+      let choices = agents.filter { $0.machineId == target?.machineId }
+      targetButton.configuration?.title = target?.name ?? String(localized: "create.row.selectAgent", bundle: .lody)
+      targetButton.accessibilityLabel = text("agent")
+      targetButton.accessibilityValue = targetButton.configuration?.title
+      targetButton.isEnabled = editable && !choices.isEmpty
+      targetButton.menu = UIMenu(children: choices.map { agent in
+        UIAction(title: agent.name, state: agent.id == target?.id ? .on : .off) { [weak self] _ in
+          guard let self, self.editable else { return }
+          self.target = agent
+          self.render()
+        }
+      })
+    }
+    for (index, controls) in targetRows.enumerated() {
+      let bound = draftTargets[index]
+      let choices = boundAgentChoices(at: index)
+      let value = bound.state == .configured ? bound.agentName : "\(bound.agentName) · \(text(bound.state.rawValue))"
+      controls.row.label.text = bound.machineName
+      controls.button.configuration?.title = value
+      controls.button.accessibilityLabel = "\(text("agent")), \(bound.machineName)"
+      controls.button.accessibilityValue = value
+      controls.button.isEnabled = editable && !choices.isEmpty
+      controls.button.menu = UIMenu(children: choices.map { agent in
+        let selected = agent.machineId == bound.machineId && agent.id == bound.agentConfigId
+        return UIAction(title: "\(agent.name) · \(agent.machineName)", state: selected ? .on : .off) { [weak self] _ in
+          self?.selectBoundAgent(agent, at: index)
+        }
+      })
+    }
     errorLabel.text = failure
     errorView.isHidden = failure.isEmpty
     cancelItem.isEnabled = !busy
@@ -242,20 +283,22 @@ final class AgentRoleEditorController: LodyFormController {
     LodyShell.shared.pushNative(picker, title: picker.title ?? "", from: self)
   }
 
-  private func pickTarget() {
-    guard let machineId = target?.machineId else { return pickMachine() }
-    let choices = agents.filter { $0.machineId == machineId }
-    let picker = CreateChoiceController(
-      title: String(localized: "create.row.selectAgent", bundle: .lody), header: String(localized: "create.label.agent", bundle: .lody),
-      placeholder: String(localized: "create.picker.agent.placeholder", bundle: .lody),
-      options: choices.map { ($0.id, $0.name, "") }, selected: target?.id,
-      marks: Dictionary(choices.map { ($0.id, LodyAgentIcon.mark(cliType: $0.cliType, agentType: $0.agentType)) }, uniquingKeysWith: { first, _ in first })
-    ) { [weak self] id in
-      guard let self, let agent = choices.first(where: { $0.id == id }) else { return }
-      self.target = agent
-      self.render()
+  private func boundAgentChoices(at index: Int) -> [AgentRoleAgent] {
+    let occupied = Set(draftTargets.enumerated().compactMap { $0.offset == index ? nil : $0.element.machineId })
+    return agents.filter { !occupied.contains($0.machineId) }
+  }
+
+  private func selectBoundAgent(_ agent: AgentRoleAgent, at index: Int) {
+    guard editable, let original = role?.targets[index] else { return }
+    if original.machineId == agent.machineId, original.agentConfigId == agent.id {
+      draftTargets[index] = original
+    } else {
+      draftTargets[index] = AgentRoleTarget(
+        machineId: agent.machineId, agentConfigId: agent.id, alias: original.alias,
+        machineName: agent.machineName, agentName: agent.name, state: .configured
+      )
     }
-    LodyShell.shared.pushNative(picker, title: picker.title ?? "", from: self)
+    render()
   }
 
   private func confirmDelete() {
@@ -269,11 +312,11 @@ final class AgentRoleEditorController: LodyFormController {
 
   private func provisional(_ fields: RuntimeContract.AgentRolesParamsSaveFields) -> AgentRole {
     let visibility: RuntimeContract.AgentRoleItemVisibility = fields.visibility == .workspace ? .workspace : .private
-    let targets = role?.targets ?? target.map {
-      [RuntimeContract.AgentRoleItemTargetsItem(
+    let targets = role == nil ? target.map {
+      [AgentRoleTarget(
         machineId: $0.machineId, agentConfigId: $0.id, machineName: $0.machineName, agentName: $0.name, state: .configured
       )]
-    } ?? []
+    } ?? [] : draftTargets
     return AgentRole(
       id: id, ownerUserId: workspace.userId, visibility: visibility, name: fields.name.trimmingCharacters(in: .whitespacesAndNewlines),
       description: fields.description, promptPrefix: fields.promptPrefix, emoji: fields.emoji ?? emoji,
@@ -293,8 +336,12 @@ final class AgentRoleEditorController: LodyFormController {
         name: name.text ?? "", description: summary.text ?? "", promptPrefix: prompt.text,
         visibility: shared.toggle.isOn ? .workspace : .private, emoji: emoji
       )
-      let destination = target.map { RuntimeContract.AgentRolesParamsSaveTarget(machineId: $0.machineId, agentConfigId: $0.id) }
-      request = .save(id: id, base: role, fields: fields, target: destination)
+      let destination = role == nil ? target.map { RuntimeContract.AgentRolesParamsSaveTarget(machineId: $0.machineId, agentConfigId: $0.id) } : nil
+      let changes: [RuntimeContract.AgentRolesParamsSaveTargetChangesItem] = zip(role?.targets ?? [], draftTargets).compactMap { original, next in
+        guard original.machineId != next.machineId || original.agentConfigId != next.agentConfigId else { return nil }
+        return .init(fromMachineId: original.machineId, machineId: next.machineId, agentConfigId: next.agentConfigId)
+      }
+      request = .save(id: id, base: role, fields: fields, target: destination, targetChanges: changes.isEmpty ? nil : changes)
       preview = provisional(fields)
     }
     busy = true

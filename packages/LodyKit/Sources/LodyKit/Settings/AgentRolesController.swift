@@ -140,7 +140,7 @@ class AgentRolesController: UIViewController {
     if role == nil, !live { return }
     let key = workspace.key
     let editor = AgentRoleEditorController(
-      workspace: workspace, scope: scope, role: role, agents: snapshot.agents, service: service
+      workspace: workspace, scope: scope, role: role, agents: snapshot.agents, writesEnabled: live, service: service
     )
     var previous: AgentRoleSnapshot?
     editor.willChange = { [weak self] id, next in
@@ -183,8 +183,8 @@ class AgentRolesController: UIViewController {
       switch request {
       case .list:
         .list(.init(workspaceId: workspaceId, userId: userId))
-      case .save(let id, let base, let fields, let target):
-        .save(.init(workspaceId: workspaceId, userId: userId, id: id, base: base, fields: fields, target: target))
+      case .save(let id, let base, let fields, let target, let targetChanges):
+        .save(.init(workspaceId: workspaceId, userId: userId, id: id, base: base, fields: fields, target: target, targetChanges: targetChanges))
       case .delete(let base):
         .delete(.init(workspaceId: workspaceId, userId: userId, base: base))
       }

@@ -62,6 +62,7 @@ private final class AgentRolesFixture {
     ],
     agents: [
       .init(id: "a1", name: "Coder", machineId: "m1", machineName: "Studio"),
+      .init(id: "a3", name: "Researcher", machineId: "m1", machineName: "Studio"),
       .init(id: "a2", name: "Reviewer", machineId: "m2", machineName: "Laptop"),
     ]
   )
@@ -77,7 +78,7 @@ private final class AgentRolesFixture {
         failList = false
         throw CocoaError(.fileReadUnknown)
       }
-    case .save(let id, let base, let fields, let target):
+    case .save(let id, let base, let fields, let target, let targetChanges):
       if fields.name == "Switch" {
         switched = true
         NotificationCenter.default.post(name: Self.change, object: nil)
@@ -86,7 +87,7 @@ private final class AgentRolesFixture {
       if data.roles.contains(where: { $0.id != id && $0.name == fields.name.trimmingCharacters(in: .whitespacesAndNewlines) }) {
         throw Self.failure("role_duplicate")
       }
-      if base != nil, failSave {
+      if base != nil, targetChanges == nil, failSave {
         failSave = false
         throw Self.failure("role_conflict")
       }
@@ -98,11 +99,18 @@ private final class AgentRolesFixture {
           next.description = fields.description
           next.promptPrefix = fields.promptPrefix
           next.visibility = fields.visibility == .workspace ? .workspace : .private
+          next.targets = role.targets.map { current in
+            guard let change = targetChanges?.first(where: { $0.fromMachineId == current.machineId }),
+                  let agent = data.agents.first(where: { $0.machineId == change.machineId && $0.id == change.agentConfigId })
+            else { return current }
+            return .init(machineId: agent.machineId, agentConfigId: agent.id, alias: current.alias,
+                         machineName: agent.machineName, agentName: agent.name, state: .configured)
+          }
           next.revision += 1
           next.updatedAt = 2
           return next
         }
-      } else if let agent = data.agents.first(where: { $0.id == target?.agentConfigId }) {
+      } else if let agent = data.agents.first(where: { $0.machineId == target?.machineId && $0.id == target?.agentConfigId }) {
         let placed = RuntimeContract.AgentRoleItemTargetsItem(
           machineId: agent.machineId, agentConfigId: agent.id, machineName: agent.machineName, agentName: agent.name,
           state: .configured

@@ -94,6 +94,16 @@ export const AgentRolesParams = z
           agentConfigId: z.string().min(1),
         })
         .optional(),
+      targetChanges: z
+        .array(
+          z.object({
+            fromMachineId: z.string().min(1),
+            machineId: z.string().min(1),
+            agentConfigId: z.string().min(1),
+          }),
+        )
+        .max(64)
+        .optional(),
     }),
     z.object({
       ...settingsScope,

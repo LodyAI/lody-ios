@@ -1087,6 +1087,19 @@
                 "agentConfigId": { "type": "string", "minLength": 1 }
               },
               "required": ["machineId", "agentConfigId"]
+            },
+            "targetChanges": {
+              "maxItems": 64,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "fromMachineId": { "type": "string", "minLength": 1 },
+                  "machineId": { "type": "string", "minLength": 1 },
+                  "agentConfigId": { "type": "string", "minLength": 1 }
+                },
+                "required": ["fromMachineId", "machineId", "agentConfigId"]
+              }
             }
           },
           "required": [
