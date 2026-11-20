@@ -4,13 +4,16 @@ export const SessionPreviewParams = z
   .object({
     sessionId: z.string().min(1),
     userId: z.string(),
-    action: z.enum(['create', 'revoke']).optional(),
+    action: z.enum(['create', 'status', 'revoke']).optional(),
+    restart: z.boolean().optional(),
   })
   .meta({ id: 'SessionPreviewParams' });
 
 export const SessionPreviewResult = z
   .object({
     url: z.string().min(1).optional(),
+    expiresAt: z.number().optional(),
+    active: z.boolean().optional(),
     error: z.string().optional(),
     message: z.string().optional(),
     status: z.number().int().optional(),

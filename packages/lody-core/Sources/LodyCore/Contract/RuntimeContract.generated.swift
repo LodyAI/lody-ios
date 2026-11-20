@@ -7169,6 +7169,7 @@ extension RuntimeContract {
 
   public enum SessionPreviewParamsAction: String, Codable, Sendable, Equatable, CaseIterable {
     case create = "create"
+    case status = "status"
     case revoke = "revoke"
   }
 
@@ -7176,32 +7177,40 @@ extension RuntimeContract {
     public var sessionId: String
     public var userId: String
     public var action: SessionPreviewParamsAction?
-    public init(sessionId: String, userId: String, action: SessionPreviewParamsAction? = nil) {
+    public var restart: Bool?
+    public init(sessionId: String, userId: String, action: SessionPreviewParamsAction? = nil, restart: Bool? = nil) {
       self.sessionId = sessionId
       self.userId = userId
       self.action = action
+      self.restart = restart
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
       self.sessionId = try c.decode(String.self, forKey: Key("sessionId"))
       self.userId = try c.decode(String.self, forKey: Key("userId"))
       self.action = try c.decodeIfPresent(SessionPreviewParamsAction.self, forKey: Key("action"))
+      self.restart = try c.decodeIfPresent(Bool.self, forKey: Key("restart"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
       try c.encode(self.sessionId, forKey: Key("sessionId"))
       try c.encode(self.userId, forKey: Key("userId"))
       try c.encodeIfPresent(self.action, forKey: Key("action"))
+      try c.encodeIfPresent(self.restart, forKey: Key("restart"))
     }
   }
 
   public struct SessionPreviewResult: Codable, Sendable, Equatable {
     public var url: String?
+    public var expiresAt: Double?
+    public var active: Bool?
     public var error: String?
     public var message: String?
     public var status: Int?
-    public init(url: String? = nil, error: String? = nil, message: String? = nil, status: Int? = nil) {
+    public init(url: String? = nil, expiresAt: Double? = nil, active: Bool? = nil, error: String? = nil, message: String? = nil, status: Int? = nil) {
       self.url = url
+      self.expiresAt = expiresAt
+      self.active = active
       self.error = error
       self.message = message
       self.status = status
@@ -7209,6 +7218,8 @@ extension RuntimeContract {
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
       self.url = try c.decodeIfPresent(String.self, forKey: Key("url"))
+      self.expiresAt = try c.decodeIfPresent(Double.self, forKey: Key("expiresAt"))
+      self.active = try c.decodeIfPresent(Bool.self, forKey: Key("active"))
       self.error = try c.decodeIfPresent(String.self, forKey: Key("error"))
       self.message = try c.decodeIfPresent(String.self, forKey: Key("message"))
       self.status = try c.decodeIfPresent(Int.self, forKey: Key("status"))
@@ -7216,6 +7227,8 @@ extension RuntimeContract {
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
       try c.encodeIfPresent(self.url, forKey: Key("url"))
+      try c.encodeIfPresent(self.expiresAt, forKey: Key("expiresAt"))
+      try c.encodeIfPresent(self.active, forKey: Key("active"))
       try c.encodeIfPresent(self.error, forKey: Key("error"))
       try c.encodeIfPresent(self.message, forKey: Key("message"))
       try c.encodeIfPresent(self.status, forKey: Key("status"))

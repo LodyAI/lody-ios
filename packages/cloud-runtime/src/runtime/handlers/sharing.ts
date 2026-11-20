@@ -5,6 +5,7 @@ import {
   iosSimulatorControl,
   previewTarget,
   revokePreview,
+  statusPreview,
 } from '../preview';
 import { sessionDoc } from '../session';
 import { sessionActionMeta } from '../fork-session';
@@ -89,11 +90,17 @@ export function registerSharing(ctx: RuntimeContext) {
   channel.handle('sessionPreview', async (args) => {
     const doc = sessionDoc(args.sessionId);
     const target = doc && previewTarget(doc);
+    if (args.action === 'status') {
+      const control = previewControl(args.sessionId, args.userId);
+      return statusPreview({ ...control, target });
+    }
+    if (args.action === 'revoke') {
+      const control = previewControl(args.sessionId, args.userId);
+      return revokePreview(control);
+    }
     if (!target) return { error: 'unavailable' };
     const control = previewControl(args.sessionId, args.userId);
-    return args.action === 'revoke'
-      ? revokePreview(control)
-      : createPreview({ ...control, target });
+    return createPreview({ ...control, target, restart: args.restart });
   });
   function machineCapabilities(machineId: string) {
     const room = `machine-${machineId}`;

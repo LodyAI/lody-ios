@@ -120,6 +120,7 @@ final class SessionSimulator {
   private(set) var preview: SimulatorService.Preview?
   /// Android only; the host does not report the tier, so this is the last one requested.
   private(set) var quality = DevicePreviewQuality.balanced
+  var onStop: (() -> Void)?
   private var version = 0
   private var task: Task<Void, Never>?
   private var watchers: [Watcher] = []
@@ -144,7 +145,10 @@ final class SessionSimulator {
   init(sessionId: String, service: SimulatorService) { self.sessionId = sessionId; self.service = service }
   isolated deinit { task?.cancel() }
   func finish() { version += 1; task?.cancel(); task = nil }
-  func watch(_ owner: AnyObject, changed: @escaping () -> Void) { watchers.append(.init(owner: owner, changed: changed)) }
+  func watch(_ owner: AnyObject, changed: @escaping () -> Void) {
+    watchers.removeAll { $0.owner == nil || $0.owner === owner }
+    watchers.append(.init(owner: owner, changed: changed))
+  }
   private func publish() { watchers.removeAll { $0.owner == nil }; for watcher in watchers { watcher.changed() } }
   func hidePreview() { hidden = preview?.operationId; publish() }
   func revealPreview() { hidden = nil; publish() }
@@ -206,6 +210,7 @@ final class SessionSimulator {
     version += 1; task?.cancel(); task = nil
     let operationId = preview?.operationId
     preview = nil; phase = "closed"; publish()
+    onStop?()
     guard let operationId else { return }
     _ = try await request(.stop(operationId: operationId))
   }
