@@ -28,7 +28,14 @@ final class BrowserPreviewController: UIViewController, WKNavigationDelegate, WK
       renderLinkStatus()
     }
   }
+  var canStopProcess = false {
+    didSet {
+      guard oldValue != canStopProcess else { return }
+      renderNavigationItems()
+    }
+  }
   var onRegenerate: (() -> Void)?
+  var onDisconnect: ((Bool) -> Void)?
 
   private var webViewCreated = false
   private lazy var webView: WKWebView = {
@@ -133,6 +140,7 @@ final class BrowserPreviewController: UIViewController, WKNavigationDelegate, WK
       webView.uiDelegate = nil
     }
     onRegenerate = nil
+    onDisconnect = nil
   }
 
   /// Appended once the hosting page has loaded, so a sheet keeps the shell's shared close item
@@ -216,6 +224,34 @@ final class BrowserPreviewController: UIViewController, WKNavigationDelegate, WK
       !($0.accessibilityIdentifier?.hasPrefix(Self.ownedButtonPrefix) ?? false)
     }
     var owned: [UIBarButtonItem] = []
+    if onDisconnect != nil {
+      var disconnectActions: [UIAction] = [
+        UIAction(
+          title: String(localized: "session.preview.disconnectRemoteOnly", bundle: .lody),
+          image: UIImage(systemName: "stop.circle")
+        ) { [weak self] _ in
+          self?.onDisconnect?(false)
+        },
+      ]
+      if canStopProcess {
+        disconnectActions.append(
+          UIAction(
+            title: String(localized: "session.preview.disconnectAndStopProcess", bundle: .lody),
+            image: UIImage(systemName: "power"),
+            attributes: .destructive
+          ) { [weak self] _ in
+            self?.onDisconnect?(true)
+          }
+        )
+      }
+      let disconnect = UIBarButtonItem(
+        image: UIImage(systemName: "power"),
+        menu: UIMenu(children: disconnectActions)
+      )
+      disconnect.accessibilityLabel = String(localized: "session.preview.stop", bundle: .lody)
+      disconnect.accessibilityIdentifier = "browser-preview-disconnect"
+      owned.append(disconnect)
+    }
     switch linkStatus {
     case .idle:
       break

@@ -305,6 +305,31 @@ test('revoke signs a revoke intent and reports success', async () => {
   ]);
 });
 
+test('revoke with stopProcess signs stopProcess: true and forwards stopProcess param', async () => {
+  const intents = [];
+  const { calls, rpc } = machine(({ method }) =>
+    method === 'machine/preview-control'
+      ? { result: { success: true, runtimeNonce: nonce } }
+      : { result: { success: true } },
+  );
+  const reply = await runtime.revokePreview(
+    args({
+      rpc,
+      stopProcess: true,
+      mintToken: async (intent) => {
+        intents.push(intent);
+        return 'signed';
+      },
+    }),
+  );
+  assert.deepEqual(reply, {});
+  assert.deepEqual(intents[0].operation, {
+    action: 'revoke',
+    stopProcess: true,
+  });
+  assert.equal(calls[1].params.stopProcess, true);
+});
+
 test('summary labels the target and tracks a live connection', () => {
   const local = { protocol: 'http', host: '127.0.0.1', port: 8421 };
   assert.deepEqual(

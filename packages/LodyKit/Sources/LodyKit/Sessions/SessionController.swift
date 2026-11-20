@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresentationControllerDelegate {
-  typealias BrowserRequest = @MainActor (SessionListState, RuntimeContract.SessionPreviewParamsAction, Bool) async throws -> RuntimeContract.SessionPreviewResult
+  typealias BrowserRequest = @MainActor (SessionListState, RuntimeContract.SessionPreviewParamsAction, Bool, Bool) async throws -> RuntimeContract.SessionPreviewResult
   let chat = LodyChatView(frame: .zero)
   let source: SessionSource
   let sessionId: String
@@ -85,9 +85,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
        browser: BrowserRequest? = nil,
        previewCache: SessionPreviewCache = .shared) {
     self.previewCache = previewCache
-    requestBrowserPreview = browser ?? { state, action, restart in
+    requestBrowserPreview = browser ?? { state, action, restart, stopProcess in
       guard let runtime = DataRuntime.current, runtime.workspace == state.workspaceId, runtime.userId == state.userId else { throw OutboxError.scopeExpired }
-      return try await runtime.perform(RuntimeContract.Calls.SessionPreview.self, .init(sessionId: sessionId, userId: state.userId, action: action, restart: restart ? true : nil))
+      return try await runtime.perform(RuntimeContract.Calls.SessionPreview.self, .init(sessionId: sessionId, userId: state.userId, action: action, restart: restart ? true : nil, stopProcess: stopProcess ? true : nil))
     }
     self.sessionId = sessionId
     self.findQuery = findQuery

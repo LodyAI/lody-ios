@@ -348,18 +348,24 @@ export async function statusPreview(
   return { active: false };
 }
 
-export async function revokePreview(args: ControlArgs): Promise<ControlResult> {
-  const signed = await proof(args, { action: 'revoke' });
-  if (!signed.proof) return signed;
-  const reply = await args.rpc(
-    'session/preview-revoke',
-    {
-      sessionId: args.sessionId,
-      requestedByUserId: args.userId,
-      proof: signed.proof,
-    },
-    35_000,
+export async function revokePreview(
+  args: ControlArgs & { stopProcess?: boolean },
+): Promise<ControlResult> {
+  const stopProcess = args.stopProcess === true;
+  const signed = await proof(
+    args,
+    stopProcess
+      ? { action: 'revoke', stopProcess: true }
+      : { action: 'revoke' },
   );
+  if (!signed.proof) return signed;
+  const params: Record<string, unknown> = {
+    sessionId: args.sessionId,
+    requestedByUserId: args.userId,
+    proof: signed.proof,
+  };
+  if (stopProcess) params.stopProcess = true;
+  const reply = await args.rpc('session/preview-revoke', params, 35_000);
   if ((reply.result as Record<string, unknown> | undefined)?.success === true)
     return {};
   return failure(reply);

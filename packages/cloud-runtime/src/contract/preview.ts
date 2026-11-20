@@ -6,6 +6,7 @@ export const SessionPreviewParams = z
     userId: z.string(),
     action: z.enum(['create', 'status', 'revoke']).optional(),
     restart: z.boolean().optional(),
+    stopProcess: z.boolean().optional(),
   })
   .meta({ id: 'SessionPreviewParams' });
 
@@ -35,7 +36,11 @@ export const IosSimulatorControlParams = z
         action: z.literal('status'),
         operationId: operationId.optional(),
       }),
-      z.object({ action: z.literal('stop'), operationId }),
+      z.object({
+        action: z.literal('stop'),
+        operationId,
+        shutdownDevice: z.boolean().optional(),
+      }),
     ]),
   })
   .meta({ id: 'IosSimulatorControlParams' });
@@ -131,7 +136,11 @@ export const AndroidEmulatorControlParams = z
         action: z.literal('status'),
         operationId: operationId.optional(),
       }),
-      z.object({ action: z.literal('stop'), operationId }),
+      z.object({
+        action: z.literal('stop'),
+        operationId,
+        shutdownDevice: z.boolean().optional(),
+      }),
     ]),
   })
   .meta({ id: 'AndroidEmulatorControlParams' });

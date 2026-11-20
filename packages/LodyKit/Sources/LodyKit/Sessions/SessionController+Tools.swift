@@ -14,16 +14,27 @@ extension SessionController {
     SessionPreviewCache.SessionKey(workspaceId: state.workspaceId, userId: state.userId, sessionId: sessionId)
   }
 
+  private func supportsPreviewStopProcess(_ state: SessionListState) -> Bool {
+    guard let session = state.catalog.session(sessionId) else { return false }
+    return state.catalog.supportsPreviewStopProcess(machineId: session.machineId)
+  }
+
   func prepareSimulator(_ state: SessionListState, _ session: SessionItem) {
     previewCache.clearOutside(workspaceId: state.workspaceId, userId: state.userId)
     let sessionKey = previewSessionKey(state)
     var restored = false
-    for platform in DevicePlatform.allCases where devicePreviews[platform] == nil && deviceAvailability(platform, state.catalog, session) != nil {
+    for platform in DevicePlatform.allCases where deviceAvailability(platform, state.catalog, session) != nil {
+      let canShutdown = state.catalog.supportsDeviceShutdown(platform, machineId: session.machineId)
+      if let existing = devicePreviews[platform] {
+        existing.canShutdownDevice = canShutdown
+        continue
+      }
       let key = SessionPreviewCache.DeviceKey(session: sessionKey, platform: platform)
       let store = previewCache.device(for: key) {
         SessionSimulator(sessionId: sessionId, service: deviceServices[platform]
           ?? .live(platform, workspaceId: state.workspaceId, userId: state.userId, sessionId: sessionId))
       }
+      store.canShutdownDevice = canShutdown
       devicePreviews[platform] = store
       if store.previewJSON.isEmpty == false { restored = true }
       store.watch(self) { [weak self] in
@@ -32,6 +43,9 @@ extension SessionController {
         renderComposer()
         render()
       }
+    }
+    if let cachedBrowser = previewCache.browser(for: sessionKey) {
+      cachedBrowser.controller.canStopProcess = supportsPreviewStopProcess(state)
     }
     if restored { updateFloatingPreview() }
   }
@@ -127,7 +141,23 @@ extension SessionController {
     guard let preview = feed?.state.preview else { return nil }
     var actions: [[String: Any]] = [["id": "copy", "title": String(localized: "session.preview.copyLink", bundle: .lody), "symbol": "link"]]
     let cachedValid = previewCache.cachedBrowser(for: previewSessionKey(source.state))?.isValid() == true
-    if preview.active || cachedValid { actions.append(["id": "stop", "title": String(localized: "session.preview.stop", bundle: .lody), "symbol": "stop.circle", "destructive": true]) }
+    let canStopProcess = supportsPreviewStopProcess(source.state)
+    if preview.active || cachedValid {
+      actions.append([
+        "id": "stop",
+        "title": String(localized: canStopProcess ? "session.preview.disconnectRemoteOnly" : "session.preview.stop", bundle: .lody),
+        "symbol": "stop.circle",
+        "destructive": !canStopProcess,
+      ])
+      if canStopProcess {
+        actions.append([
+          "id": "stop-process",
+          "title": String(localized: "session.preview.disconnectAndStopProcess", bundle: .lody),
+          "symbol": "power",
+          "destructive": true,
+        ])
+      }
+    }
     return ["id": "browser", "symbol": "safari", "busy": browserBusy, "tap": true, "tint": "primary", "menuTitle": preview.label, "actions": actions,
       "accessibilityLabel": String.localizedStringWithFormat(String(localized: "session.preview.open", bundle: .lody), String(describing: preview.label))]
   }
@@ -147,7 +177,24 @@ extension SessionController {
     var item: [String: Any] = ["id": Self.deviceItemId(platform), "symbol": platform == .android ? "smartphone" : "iphone",
       "busy": simulator.connecting, "tap": true, "tint": "primary", "menuTitle": name,
       "accessibilityLabel": String.localizedStringWithFormat(String(localized: "simulator.chip.open", bundle: .lody), String(describing: name))]
-    item["actions"] = simulator.running ? [["id": "stop", "title": String(localized: "simulator.stop", bundle: .lody), "symbol": "stop.circle", "destructive": true]] : []
+    var actions: [[String: Any]] = []
+    if simulator.running {
+      actions.append([
+        "id": "stop",
+        "title": String(localized: "simulator.stop", bundle: .lody),
+        "symbol": "stop.circle",
+        "destructive": !simulator.canShutdownDevice,
+      ])
+      if simulator.canShutdownDevice {
+        actions.append([
+          "id": "stop-shutdown",
+          "title": String(localized: Self.deviceKey(platform, "stopAndShutdown"), bundle: .lody),
+          "symbol": "power",
+          "destructive": true,
+        ])
+      }
+    }
+    item["actions"] = actions
     return item
   }
 
@@ -164,13 +211,17 @@ extension SessionController {
     if resource == "browser" { browserAction(action); return }
     let platform: DevicePlatform = resource == "emulator" ? .android : .ios
     if action == "stop" {
-      Task { do { try await devicePreviews[platform]?.stop() } catch { toolError(error) } }
+      Task { do { try await devicePreviews[platform]?.stop(shutdownDevice: false) } catch { toolError(error) } }
+    } else if action == "stop-shutdown" {
+      Task { do { try await devicePreviews[platform]?.stop(shutdownDevice: true) } catch { toolError(error) } }
     } else { openSimulator(platform) }
   }
 
   private func browserAction(_ action: String) {
     let state = source.state
     let sessionKey = previewSessionKey(state)
+    let isStop = action == "stop" || action == "stop-process"
+    let stopProcess = action == "stop-process"
 
     if action == "copy", let cached = previewCache.browser(for: sessionKey), cached.isValid() {
       UIPasteboard.general.string = cached.url.absoluteString
@@ -178,7 +229,7 @@ extension SessionController {
       return
     }
 
-    if action != "stop", action != "copy", let cached = previewCache.browser(for: sessionKey) {
+    if !isStop, action != "copy", let cached = previewCache.browser(for: sessionKey) {
       presentCachedBrowser(cached, state: state, sessionKey: sessionKey)
       if cached.isValid() {
         verifyCachedBrowserPreview(cached, state: state, sessionKey: sessionKey)
@@ -196,21 +247,25 @@ extension SessionController {
       guard let self else { return }
       defer { browserBusy = false; renderComposer() }
       do {
-        if action == "stop" {
+        if isStop {
           browserCheckTask?.cancel()
           browserCheckTask = nil
         }
-        let command: RuntimeContract.SessionPreviewParamsAction = action == "stop" ? .revoke : .create
-        let reply = try await requestBrowserPreview(state, command, false)
+        let command: RuntimeContract.SessionPreviewParamsAction = isStop ? .revoke : .create
+        let reply = try await requestBrowserPreview(state, command, false, stopProcess)
         guard source.state.key == state.key else { throw OutboxError.scopeExpired }
         guard viewIfLoaded?.window != nil else { return }
         if let error = reply.error {
           let message = error == "unsupported" ? String(localized: "session.preview.unsupported", bundle: .lody) : reply.message ?? String(localized: "session.preview.generic", bundle: .lody)
           throw SettingsError(message)
         }
-        if action == "stop" {
+        if isStop {
+          if let presented = previewCache.browser(for: sessionKey)?.controller, presented.viewIfLoaded?.window != nil {
+            LodyShell.shared.close(from: presented)
+          }
           previewCache.removeBrowser(for: sessionKey)
-          LodyToastOverlay.shared.show(message: String(localized: "session.preview.stopped", bundle: .lody), kind: .neutral)
+          let toastKey = stopProcess ? "session.preview.stoppedWithProcess" : "session.preview.stopped"
+          LodyToastOverlay.shared.show(message: String(localized: String.LocalizationValue(toastKey), bundle: .lody), kind: .neutral)
           return
         }
         guard let url = SessionPreviewCache.validatedPreviewURL(reply.url) else {
@@ -243,8 +298,12 @@ extension SessionController {
 
   private func presentCachedBrowser(_ entry: SessionPreviewCache.BrowserEntry, state: SessionListState, sessionKey: SessionPreviewCache.SessionKey) {
     let controller = entry.controller
+    controller.canStopProcess = supportsPreviewStopProcess(state)
     controller.onRegenerate = { [weak self] in
       self?.regenerateBrowserPreview(state: state, sessionKey: sessionKey)
+    }
+    controller.onDisconnect = { [weak self] stopProcess in
+      self?.browserAction(stopProcess ? "stop-process" : "stop")
     }
     if controller.viewIfLoaded?.window != nil { return }
     controller.detachFromParentIfNeeded()
@@ -258,7 +317,7 @@ extension SessionController {
     browserCheckTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let reply = try await requestBrowserPreview(state, .status, false)
+        let reply = try await requestBrowserPreview(state, .status, false, false)
         guard !Task.isCancelled, source.state.key == state.key else { return }
         guard previewCache.browser(for: sessionKey) === entry else { return }
         if reply.active == true {
@@ -293,7 +352,7 @@ extension SessionController {
       guard let self else { return }
       defer { browserBusy = false; renderComposer() }
       do {
-        let reply = try await requestBrowserPreview(state, .create, true)
+        let reply = try await requestBrowserPreview(state, .create, true, false)
         guard source.state.key == state.key else { throw OutboxError.scopeExpired }
         if let error = reply.error {
           let message = error == "unsupported" ? String(localized: "session.preview.unsupported", bundle: .lody) : reply.message ?? String(localized: "session.preview.generic", bundle: .lody)

@@ -19,7 +19,7 @@ struct SimulatorService {
     case list
     case start(id: String, quality: DevicePreviewQuality?)
     case status(operationId: String?)
-    case stop(operationId: String)
+    case stop(operationId: String, shutdownDevice: Bool = false)
   }
   /// iOS UDIDs and Android AVD names are both `id`.
   struct Device: Equatable, Sendable {
@@ -56,7 +56,7 @@ struct SimulatorService {
       case .list: .list(.init())
       case .start(let id, _): .start(.init(udid: id))
       case .status(let operationId): .status(.init(operationId: operationId))
-      case .stop(let operationId): .stop(.init(operationId: operationId))
+      case .stop(let operationId, let shutdownDevice): .stop(.init(operationId: operationId, shutdownDevice: shutdownDevice ? true : nil))
       }
       let reply = try await call(wire)
       return Reply(success: reply.success == true,
@@ -73,7 +73,7 @@ struct SimulatorService {
       case .list: .list(.init())
       case .start(let id, let quality): .start(.init(id: id, quality: quality.flatMap { RuntimeContract.AndroidEmulatorControlParamsCommandStartQuality(rawValue: $0.rawValue) }))
       case .status(let operationId): .status(.init(operationId: operationId))
-      case .stop(let operationId): .stop(.init(operationId: operationId))
+      case .stop(let operationId, let shutdownDevice): .stop(.init(operationId: operationId, shutdownDevice: shutdownDevice ? true : nil))
       }
       let reply = try await call(wire)
       return Reply(success: reply.success == true,
@@ -113,6 +113,12 @@ final class SessionSimulator {
   let sessionId: String
   let service: SimulatorService
   var platform: DevicePlatform { service.platform }
+  var canShutdownDevice = false {
+    didSet {
+      guard oldValue != canShutdownDevice else { return }
+      publish()
+    }
+  }
   private(set) var deviceType = ""
   private(set) var name = ""
   private(set) var phase = "closed"
@@ -206,13 +212,13 @@ final class SessionSimulator {
       } catch { if !Task.isCancelled, token == version { fail(error) } }
     }
   }
-  func stop() async throws {
+  func stop(shutdownDevice: Bool = false) async throws {
     version += 1; task?.cancel(); task = nil
     let operationId = preview?.operationId
     preview = nil; phase = "closed"; publish()
     onStop?()
     guard let operationId else { return }
-    _ = try await request(.stop(operationId: operationId))
+    _ = try await request(.stop(operationId: operationId, shutdownDevice: shutdownDevice))
   }
   private func request(_ command: SimulatorService.Command) async throws -> SimulatorService.Reply {
     let reply = try await service.call(command)

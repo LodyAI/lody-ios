@@ -1663,16 +1663,20 @@ extension RuntimeContract {
 
   public struct AndroidEmulatorControlParamsCommandStop: Codable, Sendable, Equatable {
     public var operationId: String
-    public init(operationId: String) {
+    public var shutdownDevice: Bool?
+    public init(operationId: String, shutdownDevice: Bool? = nil) {
       self.operationId = operationId
+      self.shutdownDevice = shutdownDevice
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
       self.operationId = try c.decode(String.self, forKey: Key("operationId"))
+      self.shutdownDevice = try c.decodeIfPresent(Bool.self, forKey: Key("shutdownDevice"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
       try c.encode(self.operationId, forKey: Key("operationId"))
+      try c.encodeIfPresent(self.shutdownDevice, forKey: Key("shutdownDevice"))
     }
   }
 
@@ -3825,16 +3829,20 @@ extension RuntimeContract {
 
   public struct IosSimulatorControlParamsCommandStop: Codable, Sendable, Equatable {
     public var operationId: String
-    public init(operationId: String) {
+    public var shutdownDevice: Bool?
+    public init(operationId: String, shutdownDevice: Bool? = nil) {
       self.operationId = operationId
+      self.shutdownDevice = shutdownDevice
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
       self.operationId = try c.decode(String.self, forKey: Key("operationId"))
+      self.shutdownDevice = try c.decodeIfPresent(Bool.self, forKey: Key("shutdownDevice"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
       try c.encode(self.operationId, forKey: Key("operationId"))
+      try c.encodeIfPresent(self.shutdownDevice, forKey: Key("shutdownDevice"))
     }
   }
 
@@ -7178,11 +7186,13 @@ extension RuntimeContract {
     public var userId: String
     public var action: SessionPreviewParamsAction?
     public var restart: Bool?
-    public init(sessionId: String, userId: String, action: SessionPreviewParamsAction? = nil, restart: Bool? = nil) {
+    public var stopProcess: Bool?
+    public init(sessionId: String, userId: String, action: SessionPreviewParamsAction? = nil, restart: Bool? = nil, stopProcess: Bool? = nil) {
       self.sessionId = sessionId
       self.userId = userId
       self.action = action
       self.restart = restart
+      self.stopProcess = stopProcess
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
@@ -7190,6 +7200,7 @@ extension RuntimeContract {
       self.userId = try c.decode(String.self, forKey: Key("userId"))
       self.action = try c.decodeIfPresent(SessionPreviewParamsAction.self, forKey: Key("action"))
       self.restart = try c.decodeIfPresent(Bool.self, forKey: Key("restart"))
+      self.stopProcess = try c.decodeIfPresent(Bool.self, forKey: Key("stopProcess"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
@@ -7197,6 +7208,7 @@ extension RuntimeContract {
       try c.encode(self.userId, forKey: Key("userId"))
       try c.encodeIfPresent(self.action, forKey: Key("action"))
       try c.encodeIfPresent(self.restart, forKey: Key("restart"))
+      try c.encodeIfPresent(self.stopProcess, forKey: Key("stopProcess"))
     }
   }
 
