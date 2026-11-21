@@ -1,4 +1,4 @@
-"""The first-use Later submenu and Undo on the offline Home Status list."""
+"""Later, Undo and held moves on the offline Home Status list."""
 import sys
 
 import catalog
@@ -44,4 +44,30 @@ for key, evidence in [('home.status.later', 'later-undo'), ('home.status.settle'
     ui.element('focus-a')
 
 ui.capture('restored-focus')
-print('PASS: Later and Settled start collapsed, Later shows presets on first use, and both actions undo.')
+
+
+def check_first(first_id, second_id):
+    def ordered(items):
+        by_id = {i['AXUniqueId']: i for i in items if i.get('AXLabel') in {first_id, second_id}
+                 and i.get('AXUniqueId') == i['AXLabel']}
+        if not {first_id, second_id} <= by_id.keys():
+            return False
+        first, second = by_id[first_id], by_id[second_id]
+        return (first['frame']['y'] < second['frame']['y']
+                and catalog.text('home.status.moveDown') in first['custom_actions']
+                and catalog.text('home.status.moveUp') not in first['custom_actions']
+                and catalog.text('home.status.moveUp') in second['custom_actions'])
+    ui.wait(ordered, f'Expected {first_id} first and refreshed accessibility actions')
+
+
+ui.axe('touch', *center(ui.element('focus-woken')), '--down', '--up', '--delay', '.85')
+ui.axe('tap', *center(menu_action('home.status.moveToTop')))
+check_first('focus-woken', 'focus-a')
+ui.open_case('status-catalog-repeat')
+check_first('focus-woken', 'focus-a')
+ui.capture('held-move')
+ui.open_case('status-catalog-readback')
+check_first('focus-woken', 'focus-a')
+ui.capture('read-back-move')
+print('PASS: Later and Settled start collapsed, Later shows presets on first use, and both actions undo. '
+      'The moved row keeps its place through catalog readback and the accessibility actions follow the new order.')

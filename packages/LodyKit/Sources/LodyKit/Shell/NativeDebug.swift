@@ -39,6 +39,10 @@ enum NativeDebug {
       LodyShell.shared.pushRootNative(NativeDebugController(), title: "Debug")
       return
     }
+    if scenario == "status-catalog-repeat" || scenario == "status-catalog-readback" {
+      StatusViewPreview.publishCatalog(readBackMove: scenario == "status-catalog-readback")
+      return
+    }
     if scenario.hasPrefix("schedule-fixture-") {
       ScheduleFixture.shared.control(String(scenario.dropFirst("schedule-fixture-".count)))
       return
@@ -339,9 +343,10 @@ enum NativeHomeFixture {
       }
     }
     UserDefaults.standard.removeObject(forKey: "inboxProjectSort")
-    // Every offline Home run starts expanded, even after a failed interaction check.
+    // Reset offline Home to its default folds, even after a failed interaction check.
     UserDefaults.standard.removeObject(forKey: "homeFoldedOpeners")
     UserDefaults.standard.removeObject(forKey: "homeCollapsedGroups")
+    UserDefaults.standard.removeObject(forKey: "homeExpandedGroups")
     if LodyUIVerify.has("--ui-verify-tab-unread"), var sessions = catalog["sessions"] as? [[String: Any]],
        var unread = sessions.first(where: { $0["id"] as? String == "ui-design" }) {
       unread["id"] = "ui-unread-tab"

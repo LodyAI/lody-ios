@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 enum StatusViewPreview {
   private static var layout = StatusViewLayout()
+  private static var pendingMove: StatusViewLayout?
   private static var initialIds: [String] = []
   private static var archivedIds: Set<String> = []
   private static let hour = 3_600_000.0
@@ -34,6 +35,7 @@ enum StatusViewPreview {
     )
     initialIds = layout.index.keys.sorted().filter { $0 != "ui-design" }
     archivedIds = []
+    pendingMove = nil
   }
 
   static func project(into catalog: inout SessionCatalog) {
@@ -70,7 +72,15 @@ enum StatusViewPreview {
     let before = layout
     switch command {
     case .move:
-      if let hold = StatusViewHold(command, base: layout) { layout = hold.apply(to: layout) }
+      let base = pendingMove ?? layout
+      guard let hold = StatusViewHold(command, base: base) else { return 0 }
+      let next = hold.apply(to: base)
+      if LodyUIVerify.has("--ui-review-status-hold") {
+        guard next != base else { return 0 }
+        pendingMove = next
+        return 1
+      }
+      layout = next
     case .setPinned(let id, let pinned):
       let move = StatusViewCommand.move(sessionId: id, to: pinned ? .pinned(nil) : .focus, beforeId: nil)
       if let hold = StatusViewHold(move, base: layout) { layout = hold.apply(to: layout) }
@@ -107,6 +117,15 @@ enum StatusViewPreview {
     guard layout != before else { return 0 }
     publish()
     return 1
+  }
+
+  static func publishCatalog(readBackMove: Bool) {
+    guard LodyUIVerify.status, LodyUIVerify.has("--ui-review-status-hold") else { return }
+    if readBackMove, let pendingMove {
+      layout = pendingMove
+      self.pendingMove = nil
+    }
+    publish()
   }
 
   private static func removeRow(_ id: String) {

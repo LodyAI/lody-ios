@@ -222,6 +222,9 @@ final class InboxController: UIViewController {
       guard let row = self?.shownLayout?.index[id], let area = StatusViewArea(sectionId: sectionId) else { return nil }
       return StatusViewPlanning.drop(row, into: area, beforeId: beforeId)
     },
+    moveDirections: { [weak self] in
+      self?.shownLayout.map { StatusViewPlanning.moveDirections(in: $0) } ?? [:]
+    },
     step: { [weak self] id, up in
       self?.shownLayout.flatMap { StatusViewPlanning.step(id, up: up, in: $0) }
     },

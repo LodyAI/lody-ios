@@ -445,6 +445,8 @@ try:
                         launch.append('--ui-verify-sticky-groups')
                     if case in STATUS_CASES:
                         launch.append('--ui-review-status')
+                    if case == 'home-status':
+                        launch.append('--ui-review-status-hold')
                     if case == 'navigation':
                         launch.append('--ui-verify-session-tabs')
                     if case in {'session-search', 'session-search-pad'}:

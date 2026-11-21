@@ -37,6 +37,7 @@ final class ChatListView: UIView, UICollectionViewDelegate {
   private(set) var collection: UICollectionView!
   private var dataSource: UICollectionViewDiffableDataSource<String, Item>!
   private var entries: [Item: Entry] = [:]
+  private var moveDirections: [String: StatusViewMoveDirections] = [:]
   private var titles: [String: String] = [:]
   /// Each labelled section's row count, shown beside a collapsed label.
   private var titleCounts: [String: String] = [:]
@@ -318,13 +319,19 @@ final class ChatListView: UIView, UICollectionViewDelegate {
         snapshot.appendItems([item], toSection: section.id)
       }
     }
-    let changed = Set(next.keys).filter { key in entries[key].map { !Self.same($0.row, next[key]!.row, $0.expanded, next[key]!.expanded) } ?? false }
+    let nextMoveDirections = status?.moveDirections() ?? [:]
+    let changed = Set(next.keys).filter { key in
+      guard let old = entries[key], let new = next[key] else { return false }
+      return !Self.same(old.row, new.row, old.expanded, new.expanded)
+        || moveDirections[key.row] != nextMoveDirections[key.row]
+    }
     // Recreate cells when commands change to discard the previous swipe presentation.
     let actionsChanged = Set(next.keys).filter { key in
       guard let old = entries[key], let new = next[key] else { return false }
       return old.row.actions != new.row.actions || old.row.leadingActions != new.row.leadingActions
     }
     entries = next
+    moveDirections = nextMoveDirections
     // Header content is not part of the item snapshot; reload labels whose count or menu changed.
     let headersChanged = Set(nextTitles.keys).filter { nextCounts[$0] != titleCounts[$0] || nextMenus[$0] != titleMenus[$0] }
     titles = nextTitles
@@ -470,8 +477,8 @@ final class ChatListView: UIView, UICollectionViewDelegate {
           expanded: entry.canToggle ? entry.expanded : nil,
           onOpen: { [weak self] in self?.openSelecting(item, id: entry.row.id) },
           onToggle: { [weak self] in self?.toggleOpener(entry.row.id) },
-          moveUp: move(entry.row.id, up: true),
-          moveDown: move(entry.row.id, up: false)
+          moveUp: moveDirections[item.row]?.up == true ? move(item.row, up: true) : nil,
+          moveDown: moveDirections[item.row]?.down == true ? move(item.row, up: false) : nil
         )
         .accessibilityAddTraits(current ? .isSelected : [])
         .accessibilityIdentifier(entry.row.id)
@@ -493,11 +500,8 @@ final class ChatListView: UIView, UICollectionViewDelegate {
     }
   }
 
-  /// The VoiceOver Move up / Move down action for a root row, nil at an edge or without permission.
-  /// The command is planned again when the action runs: a reorder elsewhere does not reconfigure this cell.
-  private func move(_ id: String, up: Bool) -> (() -> Void)? {
-    guard status?.step(id, up) != nil else { return nil }
-    return { [weak self] in
+  private func move(_ id: String, up: Bool) -> () -> Void {
+    { [weak self] in
       guard let status = self?.status, let command = status.step(id, up) else { return }
       status.perform(command)
     }
@@ -649,6 +653,7 @@ struct ChatListStatusHooks {
   var canDrag: @MainActor (_ rowId: String) -> Bool
   /// The command for dropping root row `rowId` into list section `sectionId` in front of `beforeId`; nil forbids the drop.
   var drop: @MainActor (_ rowId: String, _ sectionId: String, _ beforeId: String?) -> StatusViewCommand?
+  var moveDirections: @MainActor () -> [String: StatusViewMoveDirections]
   /// Accessibility Move up / Move down; nil at an edge.
   var step: @MainActor (_ rowId: String, _ up: Bool) -> StatusViewCommand?
   var perform: @MainActor (StatusViewCommand) -> Void

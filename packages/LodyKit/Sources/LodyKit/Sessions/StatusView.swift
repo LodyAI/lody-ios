@@ -316,6 +316,11 @@ enum StatusViewFormat {
   }
 }
 
+struct StatusViewMoveDirections: Equatable {
+  let up: Bool
+  let down: Bool
+}
+
 enum StatusViewPlanning {
   /// The row a drop lands in front of. `items` are the destination section's row ids in display
   /// order (children and footer rows included) before the drop; `roots` says which are top-level
@@ -345,11 +350,7 @@ enum StatusViewPlanning {
   /// Accessibility Move up / Move down within the row's area: the command, or nil at the edge.
   static func step(_ id: String, up: Bool, in layout: StatusViewLayout) -> StatusViewCommand? {
     guard let found = layout.root(of: id), found.row.id == id, let area = found.area else { return nil }
-    let row = found.row
-    switch area {
-    case .focus: guard row.canManage else { return nil }
-    case .pinned: guard row.canPrefer else { return nil }
-    }
+    guard drop(found.row, into: area, beforeId: nil) != nil else { return nil }
     let ids = layout.rows(in: area).map(\.id)
     guard let position = ids.firstIndex(of: id) else { return nil }
     if up {
@@ -358,6 +359,21 @@ enum StatusViewPlanning {
     }
     guard position < ids.count - 1 else { return nil }
     return .move(sessionId: id, to: area, beforeId: position + 2 < ids.count ? ids[position + 2] : nil)
+  }
+
+  static func moveDirections(in layout: StatusViewLayout) -> [String: StatusViewMoveDirections] {
+    var result: [String: StatusViewMoveDirections] = [:]
+    func add(_ rows: [StatusViewRow], in area: StatusViewArea) {
+      guard rows.count > 1 else { return }
+      for (index, row) in rows.enumerated() where drop(row, into: area, beforeId: nil) != nil {
+        result[row.id] = .init(up: index > 0, down: index < rows.count - 1)
+      }
+    }
+    add(layout.focus, in: .focus)
+    for section in layout.pinned {
+      add(section.rows, in: .pinned(section.sectionId))
+    }
+    return result
   }
 
   /// "Move to top" of the row's own area (Focus or its pin section); nil when already first.
