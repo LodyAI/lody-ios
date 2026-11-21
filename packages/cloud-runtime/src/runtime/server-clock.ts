@@ -52,16 +52,32 @@ export function createServerClock(sources: ClockSources): ServerClock {
   };
 }
 
+/**
+ * One `/api/time` read bounded by 5 s and the caller's signal. Combined by hand:
+ * `AbortSignal.any` needs iOS 17.4 and the deployment target is 16.4.
+ */
 export async function fetchLodyServerTime(signal?: AbortSignal) {
-  const timeout = AbortSignal.timeout(5_000);
-  const response = await fetch(`${workerOrigin}/api/time`, {
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    credentials: 'omit',
-  });
-  if (!response.ok) throw new Error(`time_${response.status}`);
-  const body = (await response.json()) as { serverTime?: unknown };
-  if (typeof body?.serverTime !== 'number') throw new Error('time_invalid');
-  return body.serverTime;
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('timeout', 'TimeoutError')),
+    5_000,
+  );
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    if (signal?.aborted) abort();
+    const response = await fetch(`${workerOrigin}/api/time`, {
+      signal: controller.signal,
+      credentials: 'omit',
+    });
+    if (!response.ok) throw new Error(`time_${response.status}`);
+    const body = (await response.json()) as { serverTime?: unknown };
+    if (typeof body?.serverTime !== 'number') throw new Error('time_invalid');
+    return body.serverTime;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
 }
 
 export const serverClock = createServerClock({

@@ -23,7 +23,10 @@ import {
   StatusViewCommand,
   StatusViewLayout,
 } from '../../../../packages/cloud-runtime/src/contract/status-view.ts';
-import { createServerClock } from '../../../../packages/cloud-runtime/src/runtime/server-clock.ts';
+import {
+  createServerClock,
+  fetchLodyServerTime,
+} from '../../../../packages/cloud-runtime/src/runtime/server-clock.ts';
 
 const vendorDir = new URL(
   '../../../../packages/cloud-runtime/src/protocol/lody-shared/',
@@ -452,4 +455,33 @@ test('planned writes land in the meta and workspace Flocks, one append each', as
     ),
     /forbidden/,
   );
+});
+
+test('the server time read honours the caller signal without AbortSignal.any', async (t) => {
+  const any = AbortSignal.any;
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    AbortSignal.any = any;
+    globalThis.fetch = previousFetch;
+  });
+  // iOS 16.4–17.3 WebKit has no AbortSignal.any.
+  AbortSignal.any = undefined;
+  let seen;
+  globalThis.fetch = (url, { signal }) => {
+    seen = signal;
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      signal.addEventListener('abort', () => reject(signal.reason));
+      if (String(url).endsWith('/api/time') && !signal.aborted)
+        queueMicrotask(() =>
+          resolve(new Response(JSON.stringify({ serverTime: 42 }))),
+        );
+    });
+  };
+  const caller = new AbortController();
+  assert.equal(await fetchLodyServerTime(caller.signal), 42);
+  assert.equal(seen.aborted, false);
+  caller.abort(new Error('scope_changed'));
+  await assert.rejects(fetchLodyServerTime(caller.signal), /scope_changed/);
+  assert.equal(await fetchLodyServerTime(), 42);
 });
