@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/LodyAI/Lody",
   "branch": "status-view-core",
-  "commit": "ed444e3f6dc78773dee1a22d29af42048535bcbb",
+  "commit": "e542b87296db83c9e3a69c3500804914c3cc8438",
   "license": "AGPL-3.0-only (fractional index: MIT, see its header)",
   "files": [
     {
@@ -107,7 +107,7 @@
     {
       "path": "status-view/vectors/commands.json",
       "upstream": "packages/shared/src/status-view/vectors/commands.json",
-      "sha256": "06d74bc12f4e3f0379de86f58dc3aab9703434333ee6e0a57bf2213ff06be0f5",
+      "sha256": "598ad7bd9c601f3a0e9b8c8422b7032f7891b7f825e5960d9d4bc335b66ac296",
       "adapt": []
     }
   ]
