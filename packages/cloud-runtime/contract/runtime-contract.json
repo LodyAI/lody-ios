@@ -1732,6 +1732,7 @@
         }
       ]
     },
+    "DiffScope": { "type": "string", "enum": ["branch", "uncommitted"] },
     "DiffSide": {
       "type": "object",
       "properties": {
@@ -1944,7 +1945,8 @@
       "type": "object",
       "properties": {
         "sessionId": { "type": "string", "minLength": 1 },
-        "path": { "type": "string" }
+        "path": { "type": "string" },
+        "scope": { "$ref": "DiffScope" }
       },
       "required": ["sessionId", "path"]
     },
@@ -4289,7 +4291,10 @@
     },
     "WorkspaceChangesParams": {
       "type": "object",
-      "properties": { "sessionId": { "type": "string", "minLength": 1 } },
+      "properties": {
+        "sessionId": { "type": "string", "minLength": 1 },
+        "scope": { "$ref": "DiffScope" }
+      },
       "required": ["sessionId"]
     }
   }

@@ -944,6 +944,41 @@ test('workspace changes use the session worktree and owner key, retaining deferr
   assert.equal(calls.length, 1);
 });
 
+test('uncommitted scope reaches the machine for workspace and file diffs', async () => {
+  const calls = machine((method, params) => {
+    if (method === 'code-collab/open-all-changes-diff') {
+      assert.deepEqual(params, { sessionId: 's1', scope: 'uncommitted' });
+      return {
+        result: { status: 'ok', base: 'HEAD', entries: [], truncated: false },
+      };
+    }
+    assert.equal(method, 'code-collab/open-current-diff');
+    assert.deepEqual(params, {
+      sessionId: 's1',
+      path: 'a.ts',
+      scope: 'uncommitted',
+    });
+    return {
+      result: {
+        status: 'ok',
+        path: 'a.ts',
+        oldSnapshot: { kind: 'missing' },
+        newSnapshot: { kind: 'missing' },
+      },
+    };
+  });
+  await runtime.workspaceChanges(ctx(), {
+    sessionId: 's1',
+    scope: 'uncommitted',
+  });
+  await runtime.fileDiff(ctx(), {
+    sessionId: 's1',
+    path: 'a.ts',
+    scope: 'uncommitted',
+  });
+  assert.equal(calls.length, 2);
+});
+
 test('workspace changes distinguish unavailable, rejected and successfully empty reads', async () => {
   machine(() => ({
     result: { status: 'unavailable', reason: 'transient_io' },
