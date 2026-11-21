@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/LodyAI/Lody",
   "branch": "status-view-core",
-  "commit": "9f879b404ee0dcdbe7f2b669d046285f0779a409",
+  "commit": "ed444e3f6dc78773dee1a22d29af42048535bcbb",
   "license": "AGPL-3.0-only (fractional index: MIT, see its header)",
   "files": [
     {
@@ -24,7 +24,7 @@
     {
       "path": "status-view/index.ts",
       "upstream": "packages/shared/src/status-view/index.ts",
-      "sha256": "0b37fb16eb8de8de7793d01dfa6317f26e63b36e4c7c5dbb2cd86b88ba7830c4",
+      "sha256": "c8e4555d524526cec2b76afcecc5466ecbf2882e9b3c05521042efb0cabe5c9a",
       "adapt": [
         [
           "from './command';",
@@ -59,7 +59,7 @@
     {
       "path": "status-view/layout.ts",
       "upstream": "packages/shared/src/status-view/layout.ts",
-      "sha256": "0abd0fe29ee896f47baf663a6f154505d83adacc0ebc29112582509a4835ed71",
+      "sha256": "fd8d20fb81d7e46697f4795ae7c194e8dac698a930cbd13dccea68403ead0f9e",
       "adapt": [
         [
           "from '../pinned-sections';",
@@ -78,7 +78,7 @@
     {
       "path": "status-view/command.ts",
       "upstream": "packages/shared/src/status-view/command.ts",
-      "sha256": "affee77988cbebc144e78aa570da21a5a0804863b38b747760418b55f416a907",
+      "sha256": "a0fc6749c9a7ad946b9e89ad2ec01444296e53d8e788ea906e046421802815f5",
       "adapt": [
         [
           "from '../pinned-sections';",
@@ -107,7 +107,7 @@
     {
       "path": "status-view/vectors/commands.json",
       "upstream": "packages/shared/src/status-view/vectors/commands.json",
-      "sha256": "cdf42a92e5714f10baadf13ed89923d21bc76204f48e68380f955ea97b513ead",
+      "sha256": "06d74bc12f4e3f0379de86f58dc3aab9703434333ee6e0a57bf2213ff06be0f5",
       "adapt": []
     }
   ]
