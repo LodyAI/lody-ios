@@ -4247,7 +4247,8 @@
           "type": "object",
           "propertyNames": { "type": "string" },
           "additionalProperties": { "type": "string" }
-        }
+        },
+        "workspaceReadOnly": { "type": "boolean" }
       },
       "required": ["workspaceId", "userId", "active"]
     },
@@ -4351,7 +4352,8 @@
       "type": "object",
       "properties": {
         "workspaceId": { "type": "string", "minLength": 1 },
-        "command": { "$ref": "StatusViewCommand" }
+        "command": { "$ref": "StatusViewCommand" },
+        "scope": { "type": "string", "enum": ["mine", "team"] }
       },
       "required": ["workspaceId", "command"]
     },

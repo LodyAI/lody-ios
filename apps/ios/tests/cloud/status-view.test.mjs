@@ -6,15 +6,67 @@ import { Flock } from '@loro-dev/flock-wasm/base64';
 import { projectRows } from '../../../../packages/cloud-runtime/src/protocol/catalog.ts';
 import {
   applyStatusViewWrites,
+  catalogStatusView,
   pinSectionRows,
+  planCommand,
   sessionPermissions,
+  snoozePresets,
+  statusViewState,
 } from '../../../../packages/cloud-runtime/src/runtime/status-view.ts';
+import {
+  buildStatusViewLayout,
+  planStatusViewCommand,
+} from '../../../../packages/cloud-runtime/src/protocol/lody-shared/status-view/index.ts';
+import {
+  CatalogStatusView,
+  SnoozePresetsResult,
+  StatusViewCommand,
+  StatusViewLayout,
+} from '../../../../packages/cloud-runtime/src/contract/status-view.ts';
 import { createServerClock } from '../../../../packages/cloud-runtime/src/runtime/server-clock.ts';
 
 const vendorDir = new URL(
-  '../../../../packages/cloud-runtime/src/protocol/status-view/',
+  '../../../../packages/cloud-runtime/src/protocol/lody-shared/',
   import.meta.url,
 );
+const vectors = async (name) =>
+  JSON.parse(
+    await readFile(new URL(`status-view/vectors/${name}.json`, vendorDir)),
+  );
+const cycling = (bytes) => {
+  let next = 0;
+  return () => bytes[next++ % bytes.length];
+};
+
+test('the vendored layout reproduces every golden layout vector', async () => {
+  const { cases } = await vectors('layout');
+  assert.ok(cases.length > 0);
+  for (const entry of cases) {
+    const layout = buildStatusViewLayout(entry.input);
+    assert.deepEqual(layout, entry.expected, entry.name);
+    // The host contract carries exactly what the shared layout produces.
+    assert.deepEqual(StatusViewLayout.parse(layout), layout, entry.name);
+  }
+});
+
+test('the vendored planner reproduces every golden command vector', async () => {
+  const { cases } = await vectors('commands');
+  assert.ok(cases.length > 0);
+  for (const entry of cases) {
+    const writes = planStatusViewCommand(entry.state, entry.command, {
+      nowMs: entry.env.nowMs,
+      randomByte: cycling(entry.env.randomBytes),
+    });
+    assert.deepEqual(writes, entry.expected, entry.name);
+    // Host commands are the planner's commands minus the runtime-only ones;
+    // one the contract refuses at the boundary is one the planner refuses too.
+    const runtimeOnly = ['touchOnSend', 'newSessionOrder'];
+    const accepted = StatusViewCommand.safeParse(entry.command).success;
+    if (runtimeOnly.includes(entry.command.type))
+      assert.equal(accepted, false, entry.name);
+    else if (!accepted) assert.deepEqual(writes, [], entry.name);
+  }
+});
 
 test('vendored status-view files match their recorded upstream bytes', async () => {
   const provenance = JSON.parse(
@@ -154,6 +206,169 @@ test('server clock uses the round-trip midpoint and keeps it through bad samples
   assert.equal(clock.synced(), true);
 });
 
+const NOW = Date.UTC(2026, 10, 21, 12);
+const session = (id, fields = {}) => ({
+  id,
+  machineId: 'm1',
+  title: id,
+  status: 'idle',
+  archived: false,
+  pinned: false,
+  userId: 'u1',
+  projectId: 'm1:unassigned',
+  createdAt: new Date(NOW - 60_000).toISOString(),
+  lastMessageAt: NOW - 60_000,
+  lastReadAt: NOW - 60_000,
+  ...fields,
+});
+const sources = (sessions, extra = {}) => ({
+  catalog: { sessions, machineOwners: { m1: 'u1' } },
+  machineCatalogs: new Map([['m1', { projects: [] }]]),
+  userId: 'u1',
+  readOnly: false,
+  sections: [],
+  sectionsLoaded: true,
+  nowMs: NOW,
+  ...extra,
+});
+const ids = (rows) => rows.map((row) => row.id);
+
+test('Tabs fold into their conversation and lend it their running and waiting state', () => {
+  const state = statusViewState(
+    sources([
+      session('owner', { settledAt: NOW - 1000 }),
+      session('tab', { parentSessionId: 'owner', status: 'running' }),
+      session('side', {
+        parentSessionId: 'quiet',
+        childSessionPlacement: 'side-panel',
+        status: 'running',
+      }),
+      session('quiet', { lastMessageAt: NOW - 8 * 86_400_000 }),
+      session('asks', {
+        awaitingUserSince: NOW - 5000,
+        snoozedUntil: NOW + 3_600_000,
+      }),
+      session('elsewhere', {
+        parentSessionId: 'other-machine-owner',
+        status: 'running',
+        machineId: 'm2',
+      }),
+      session('other-machine-owner', { lastMessageAt: NOW - 8 * 86_400_000 }),
+    ]),
+    'team',
+  );
+  assert.deepEqual(ids(state.sessions).sort(), [
+    'asks',
+    'other-machine-owner',
+    'owner',
+    'quiet',
+  ]);
+  const byId = Object.fromEntries(state.sessions.map((s) => [s.id, s]));
+  assert.equal(byId.owner.isWorking, true);
+  assert.equal(byId.quiet.isWorking, false, 'side chats do not count');
+  assert.equal(
+    byId['other-machine-owner'].isWorking,
+    false,
+    'another machine does not count',
+  );
+  assert.equal(byId.asks.isWaitingPermission, true);
+  const layout = buildStatusViewLayout(state);
+  // Waiting ignores its snooze; an explicit settle holds until a newer message,
+  // and quiet rows settle after seven days.
+  assert.deepEqual(ids(layout.focus).sort(), ['asks']);
+  assert.deepEqual(ids(layout.settled).sort(), [
+    'other-machine-owner',
+    'owner',
+    'quiet',
+  ]);
+});
+
+test('rows nest under their opener, through a Tab, and My tasks keeps whole families', () => {
+  const view = catalogStatusView(
+    sources([
+      session('root', { userId: 'u2' }),
+      session('tab', { parentSessionId: 'root', userId: 'u2' }),
+      session('child', { openedBySessionId: 'tab', userId: 'u1' }),
+      session('theirs', { userId: 'u2' }),
+      session('theirs-pinned', {
+        userId: 'u2',
+        pinned: true,
+        pinSectionId: 's1',
+      }),
+      session('gone', { archived: true, userId: 'u1' }),
+    ]),
+  );
+  assert.deepEqual(ids(view.team.focus).sort(), ['root', 'theirs']);
+  const root = view.team.focus.find((row) => row.id === 'root');
+  assert.deepEqual(ids(root.children), ['child']);
+  assert.deepEqual(ids(view.mine.focus), ['root']);
+  assert.deepEqual(ids(view.mine.focus[0].children), ['child']);
+  // The scope hid one pinned row; its section is unknown, so the default counts it.
+  assert.deepEqual(
+    view.mine.pinned.map((s) => [s.sectionId, s.hiddenCount]),
+    [[null, 1]],
+  );
+  assert.equal(CatalogStatusView.parse(view).sectionsLoaded, true);
+});
+
+test('read-only members get no status, pin or section actions', () => {
+  const view = catalogStatusView(
+    sources([session('s1')], {
+      readOnly: true,
+      sections: [{ id: 'a', name: 'A', orderKey: '80' }],
+    }),
+  );
+  assert.equal(view.team.canManageSections, false);
+  assert.equal(view.team.focus[0].canManage, false);
+  assert.equal(view.team.focus[0].canPrefer, false);
+  const readOnly = sources([session('s1')], { readOnly: true });
+  for (const command of [
+    { type: 'settle', sessionId: 's1', includeOpened: false },
+    { type: 'setPinned', sessionId: 's1', pinned: true },
+    { type: 'createSection', sectionId: 'b', name: 'B' },
+  ])
+    assert.deepEqual(planCommand(readOnly, command), [], command.type);
+});
+
+test('send clears Later and Settled; new conversations take the top of Focus', () => {
+  const state = sources([
+    session('later', { snoozedUntil: NOW + 3_600_000, orderKey: '80' }),
+    session('settled', { settledAt: NOW - 1000 }),
+  ]);
+  assert.deepEqual(
+    planCommand(state, { type: 'touchOnSend', sessionId: 'later' }),
+    [
+      {
+        type: 'session',
+        sessionId: 'later',
+        access: 'manage',
+        patch: { snoozedUntil: null },
+      },
+    ],
+  );
+  assert.deepEqual(
+    planCommand(state, { type: 'touchOnSend', sessionId: 'settled' })[0].patch,
+    { settledAt: null },
+  );
+  const [order] = planCommand(
+    state,
+    { type: 'newSessionOrder', sessionId: 'fresh' },
+    'team',
+    () => 0,
+  );
+  assert.ok(order.patch.orderKey < '80', order.patch.orderKey);
+});
+
+test('snooze presets resolve against the given clock', () => {
+  const result = SnoozePresetsResult.parse(snoozePresets(NOW));
+  assert.deepEqual(
+    result.presets.map((p) => p.id),
+    ['oneHour', 'laterToday', 'tomorrowMorning', 'nextWeek'],
+  );
+  assert.equal(result.presets[0].until, NOW + 3_600_000);
+  assert.ok(result.presets.every((p) => p.until > NOW));
+});
+
 const replica = (name, appended, fail = false) => {
   const flock = new Flock(name);
   return {
@@ -173,24 +388,32 @@ test('planned writes land in the meta and workspace Flocks, one append each', as
   const meta = replica('meta', appended);
   meta.flock.set(['m', 'session-s1', 'snoozedUntil'], 10);
   const workspace = replica('workspace', appended);
+  workspace.flock.set(['pinSection', 'old'], {
+    id: 'old',
+    name: 'Old',
+    orderKey: '7F',
+  });
   const written = await applyStatusViewWrites(
     [
+      { type: 'putSection', section: { id: 'a', name: 'A', orderKey: '80' } },
+      { type: 'deleteSection', sectionId: 'old' },
       {
-        kind: 'pinSection',
-        sectionId: 'a',
-        value: { id: 'a', name: 'A', orderKey: '80' },
-      },
-      {
-        kind: 'session',
+        type: 'session',
         sessionId: 's1',
-        patch: { snoozedUntil: undefined, settledAt: 20 },
+        access: 'manage',
+        patch: { snoozedUntil: null, settledAt: 20 },
       },
-      { kind: 'session', sessionId: 's2', patch: { orderKey: '7F' } },
+      {
+        type: 'session',
+        sessionId: 's2',
+        access: 'prefer',
+        patch: { orderKey: '7F' },
+      },
     ],
     meta,
     workspace,
   );
-  assert.equal(written, 3);
+  assert.equal(written, 4);
   assert.deepEqual(
     appended.map((entry) => entry.name),
     ['workspace', 'meta'],
@@ -198,16 +421,17 @@ test('planned writes land in the meta and workspace Flocks, one append each', as
   assert.equal(meta.flock.get(['m', 'session-s1', 'snoozedUntil']), undefined);
   assert.equal(meta.flock.get(['m', 'session-s1', 'settledAt']), 20);
   assert.equal(meta.flock.get(['m', 'session-s2', 'orderKey']), '7F');
-  assert.deepEqual(pinSectionRows(workspace.flock.scan())[0].name, 'A');
+  assert.deepEqual(ids(pinSectionRows(workspace.flock.scan())), ['a']);
   // The appended bytes replay into a fresh replica.
   const remote = new Flock('remote');
-  const body = appended[1].body;
-  remote.importJson(JSON.parse(new TextDecoder().decode(body.subarray(4))));
+  remote.importJson(
+    JSON.parse(new TextDecoder().decode(appended[1].body.subarray(4))),
+  );
   assert.equal(remote.get(['m', 'session-s1', 'settledAt']), 20);
 
   await assert.rejects(
     applyStatusViewWrites(
-      [{ kind: 'pinSection', sectionId: 'b', value: undefined }],
+      [{ type: 'deleteSection', sectionId: 'a' }],
       meta,
       undefined,
     ),
@@ -215,7 +439,14 @@ test('planned writes land in the meta and workspace Flocks, one append each', as
   );
   await assert.rejects(
     applyStatusViewWrites(
-      [{ kind: 'session', sessionId: 's1', patch: { settledAt: 30 } }],
+      [
+        {
+          type: 'session',
+          sessionId: 's1',
+          access: 'manage',
+          patch: { settledAt: 30 },
+        },
+      ],
       replica('meta', [], true),
       workspace,
     ),

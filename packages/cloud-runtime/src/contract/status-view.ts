@@ -157,6 +157,8 @@ export const StatusViewCommandParams = z
   .object({
     workspaceId: z.string().min(1),
     command: StatusViewCommand,
+    /** The list the gesture happened in; `move` resolves `beforeId` against it. Default `team`. */
+    scope: z.enum(['mine', 'team']).optional(),
   })
   .meta({ id: 'StatusViewCommandParams' });
 

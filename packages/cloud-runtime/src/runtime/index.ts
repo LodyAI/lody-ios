@@ -24,7 +24,16 @@ import {
   catalogBootstrapSlots,
 } from './catalog-sync';
 import { watchMachinePresence } from './machine-presence';
-import { pinSectionRows, WORKSPACE_STREAM } from './status-view.ts';
+import {
+  catalogStatusView,
+  pinSectionRows,
+  planCommand,
+  setSessionPatch,
+  statusViewNextChangeAt,
+  WORKSPACE_STREAM,
+  type StatusViewSources,
+} from './status-view.ts';
+import { serverClock } from './server-clock.ts';
 import { unknownPresence } from '../models/machines.ts';
 import type {
   Grant,
@@ -110,6 +119,7 @@ const delay = (ms: number, signal: AbortSignal) =>
 const state: RuntimeState = {
   workspace: '',
   userId: '',
+  workspaceReadOnly: false,
   metaReplica: undefined,
   presence: unknownPresence,
   knownProjects: [],
@@ -129,10 +139,40 @@ function startPresence() {
   });
 }
 
+/** What the Status view layout and planner read, at the server clock's now. */
+function statusSources(): StatusViewSources | undefined {
+  const meta = catalogs.get('meta');
+  if (!meta) return undefined;
+  const machineCatalogs = new Map(
+    meta.machineIds.flatMap((id) => {
+      const catalog = catalogs.get(id);
+      return catalog ? [[id, catalog] as const] : [];
+    }),
+  );
+  return {
+    catalog: meta,
+    machineCatalogs,
+    userId: state.userId,
+    readOnly: state.workspaceReadOnly,
+    sections: state.pinSections.sections,
+    sectionsLoaded: state.pinSections.loaded,
+    nowMs: serverClock.now(),
+  };
+}
+
 async function markDispatch(sessionId: string, turnId: string, queued = false) {
   if (!state.metaReplica) throw new Error('metadata_not_ready');
   const { flock, client } = state.metaReplica;
   const version = flock.version();
+  // A sent message brings a Later or Settled conversation back (`touchOnSend`),
+  // in the same append as the dispatch pointer.
+  const sources = statusSources();
+  if (sources)
+    for (const write of planCommand(sources, {
+      type: 'touchOnSend',
+      sessionId,
+    }))
+      if (write.type === 'session') setSessionPatch(flock, write);
   if (queued) {
     const key = ['m', `session-${sessionId}`, 'messageQueueUpdatedAt'];
     const previous = flock.get(key);
@@ -245,6 +285,22 @@ const acquireCatalogBootstrap = catalogBootstrapSlots(2);
 let revision = 0;
 let lastPublished = '';
 let publishTimer: ReturnType<typeof setTimeout> | undefined;
+let statusTimer: ReturnType<typeof setTimeout> | undefined;
+let foreground = false;
+/**
+ * Republishes when the Status view changes by time alone (wake-up, auto-settle).
+ * Only in the foreground: becoming active republishes anyway.
+ */
+function scheduleStatusRefresh(at: number | null) {
+  if (statusTimer !== undefined) clearTimeout(statusTimer);
+  statusTimer = undefined;
+  if (at === null || !foreground) return;
+  const delay = Math.min(2 ** 31 - 1, Math.max(0, at - serverClock.now()) + 50);
+  statusTimer = setTimeout(() => {
+    statusTimer = undefined;
+    publish();
+  }, delay);
+}
 function publish() {
   if (publishTimer !== undefined) return;
   // Read the current scope at flush time; never retain an old catalog payload.
@@ -308,10 +364,25 @@ function publishNow() {
     { projects: state.knownProjects },
   );
   state.knownProjects = merged.projects;
-  const catalog = JSON.stringify(merged);
-  if (catalog !== lastPublished) {
-    lastPublished = catalog;
-    channel.emit('catalog', { catalog, revision: ++revision });
+  const sources = statusSources();
+  const statusView = sources && catalogStatusView(sources);
+  scheduleStatusRefresh(statusView ? statusViewNextChangeAt(statusView) : null);
+  const published = {
+    ...merged,
+    pinSections: state.pinSections.sections,
+    ...(statusView ? { statusView } : {}),
+  };
+  // The computation instant alone is not a change worth a new revision.
+  const signature = JSON.stringify({
+    ...published,
+    ...(statusView ? { statusView: { ...statusView, nowMs: 0 } } : {}),
+  });
+  if (signature !== lastPublished) {
+    lastPublished = signature;
+    channel.emit('catalog', {
+      catalog: JSON.stringify(published),
+      revision: ++revision,
+    });
   }
   channel.emit('synced', { revision, streams: watchers.size });
 }
@@ -609,6 +680,12 @@ const ctx: RuntimeContext = {
   publishSubscriptions,
   emitSession,
   markDispatch,
+  statusSources,
+  syncClock: () => serverClock.sync(),
+  setForeground(active) {
+    foreground = active;
+    if (!active) scheduleStatusRefresh(null);
+  },
   watch,
   startPresence,
   stopPresence: () => {

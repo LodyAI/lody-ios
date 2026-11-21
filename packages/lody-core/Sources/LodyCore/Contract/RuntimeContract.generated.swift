@@ -8597,11 +8597,13 @@ extension RuntimeContract {
     public var userId: String
     public var active: Bool
     public var knownRepos: [String: String]?
-    public init(workspaceId: String, userId: String, active: Bool, knownRepos: [String: String]? = nil) {
+    public var workspaceReadOnly: Bool?
+    public init(workspaceId: String, userId: String, active: Bool, knownRepos: [String: String]? = nil, workspaceReadOnly: Bool? = nil) {
       self.workspaceId = workspaceId
       self.userId = userId
       self.active = active
       self.knownRepos = knownRepos
+      self.workspaceReadOnly = workspaceReadOnly
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
@@ -8609,6 +8611,7 @@ extension RuntimeContract {
       self.userId = try c.decode(String.self, forKey: Key("userId"))
       self.active = try c.decode(Bool.self, forKey: Key("active"))
       self.knownRepos = try c.decodeIfPresent([String: String].self, forKey: Key("knownRepos"))
+      self.workspaceReadOnly = try c.decodeIfPresent(Bool.self, forKey: Key("workspaceReadOnly"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
@@ -8616,6 +8619,7 @@ extension RuntimeContract {
       try c.encode(self.userId, forKey: Key("userId"))
       try c.encode(self.active, forKey: Key("active"))
       try c.encodeIfPresent(self.knownRepos, forKey: Key("knownRepos"))
+      try c.encodeIfPresent(self.workspaceReadOnly, forKey: Key("workspaceReadOnly"))
     }
   }
 
@@ -8854,22 +8858,31 @@ extension RuntimeContract {
     }
   }
 
+  public enum StatusViewCommandParamsScope: String, Codable, Sendable, Equatable, CaseIterable {
+    case mine = "mine"
+    case team = "team"
+  }
+
   public struct StatusViewCommandParams: Codable, Sendable, Equatable {
     public var workspaceId: String
     public var command: StatusViewCommand
-    public init(workspaceId: String, command: StatusViewCommand) {
+    public var scope: StatusViewCommandParamsScope?
+    public init(workspaceId: String, command: StatusViewCommand, scope: StatusViewCommandParamsScope? = nil) {
       self.workspaceId = workspaceId
       self.command = command
+      self.scope = scope
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
       self.workspaceId = try c.decode(String.self, forKey: Key("workspaceId"))
       self.command = try c.decode(StatusViewCommand.self, forKey: Key("command"))
+      self.scope = try c.decodeIfPresent(StatusViewCommandParamsScope.self, forKey: Key("scope"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
       try c.encode(self.workspaceId, forKey: Key("workspaceId"))
       try c.encode(self.command, forKey: Key("command"))
+      try c.encodeIfPresent(self.scope, forKey: Key("scope"))
     }
   }
 

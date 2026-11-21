@@ -18,6 +18,8 @@ export type MetaReplica = { flock: Flock; client: StreamsClient };
 export type RuntimeState = {
   workspace: string;
   userId: string;
+  /** From `start`: the member cannot write the workspace (viewer). */
+  workspaceReadOnly: boolean;
   metaReplica: MetaReplica | undefined;
   presence: MachinePresence;
   knownProjects: Pick<Project, 'id' | 'repoFullName'>[];
@@ -43,6 +45,13 @@ export type RuntimeContext = {
     turnId: string,
     queued?: boolean,
   ) => Promise<void>;
+  /** Status view inputs from the current replicas; undefined before metadata. */
+  statusSources: () =>
+    import('../status-view.ts').StatusViewSources | undefined;
+  /** One server-clock calibration sample; resolves whether it was accepted. */
+  syncClock?: () => Promise<boolean>;
+  /** The host is active; time-based Status view republishing runs only then. */
+  setForeground?: (active: boolean) => void;
   watch: (mode: string) => void;
   startPresence: () => void;
   stopPresence: () => void;
