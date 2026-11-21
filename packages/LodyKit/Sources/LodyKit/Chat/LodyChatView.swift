@@ -502,7 +502,6 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
       cell.canEdit = { [weak self] in self?.editableMessageID == row.entryID && row.kind == "user" }
       cell.onEdit = { [weak self] in self?.onEditMessage(["entryId": row.entryID]) }
       cell.label.onLink = row.kind == "user" ? { [weak self] in self?.openUserMessageLink($0) } : nil
-      cell.onQuote = row.kind == "user" && self.composer.quotesSupported != nil ? { [weak self] in self?.composer.beginQuote(row.text) } : nil
       cell.onToggle = { [weak self] in self?.toggleExpansion(row) }
       cell.onActivate = { [weak self] in
         guard let self, let index = self.dataSource.indexPath(for: row.id) else { return }

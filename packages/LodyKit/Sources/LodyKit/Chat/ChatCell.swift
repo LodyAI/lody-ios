@@ -215,8 +215,6 @@ final class ChatCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
   var onInteraction: (() -> Void)?
   var canEdit: (() -> Bool)?
   var onEdit: (() -> Void)?
-  /// Quotes the whole user message into the composer (a bubble has no text selection).
-  var onQuote: (() -> Void)?
   func updateEditAccessibility() {
     var actions = label.linkActions
     if let row, row.kind == "user" {
@@ -460,11 +458,6 @@ final class ChatCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
       var actions = [UIAction(title: String(localized: "native.chat.copy", bundle: .lody), image: UIImage(systemName: "doc.on.doc")) { _ in
         UIPasteboard.general.setMessageMarkdown(row.text)
       }]
-      if row.kind == "user", let quote = self.onQuote {
-        actions.append(UIAction(title: String(localized: "native.chat.quote.action", bundle: .lody), image: UIImage(systemName: "quote.opening")) { _ in
-          quote()
-        })
-      }
       if self.canEdit?() == true {
         let edit = self.onEdit
         let canEdit = self.canEdit
