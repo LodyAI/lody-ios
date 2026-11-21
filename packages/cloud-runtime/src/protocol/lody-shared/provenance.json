@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/LodyAI/Lody",
-  "branch": "status-view-core",
-  "commit": "e542b87296db83c9e3a69c3500804914c3cc8438",
+  "branch": "main",
+  "commit": "bffe2726210557e2849478ea9f7b0d862ecc8c5f",
   "license": "AGPL-3.0-only (fractional index: MIT, see its header)",
   "files": [
     {

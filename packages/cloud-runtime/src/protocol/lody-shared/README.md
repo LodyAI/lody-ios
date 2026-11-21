@@ -1,7 +1,7 @@
 # Vendored Lody Status view modules
 
 These files mirror `packages/shared/src` of the public Lody repository at the
-commit in `provenance.json` (branch `status-view-core`, AGPL-3.0-only; the
+commit on `main` in `provenance.json` (from LodyAI/Lody#3063; AGPL-3.0-only; the
 fractional index is MIT, see its header). They are byte-for-byte upstream except
 the relative import extensions listed per file under `adapt`; formatting is
 upstream's, so Prettier ignores this directory.
