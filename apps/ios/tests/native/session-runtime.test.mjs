@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { LoroDoc, LoroMap, LoroList, LoroText } from 'loro-crdt/base64';
 import { Flock } from '@loro-dev/flock-wasm/base64';
-import { openTestSession, loadRuntime, frame } from '../helpers.mjs';
+import {
+  openTestSession,
+  loadRuntime,
+  frame,
+  historyPublications,
+} from '../helpers.mjs';
 
 test('an existing legacy Loro history opens while session metadata is unavailable', async () => {
   const resolveTarget = () => undefined;
@@ -47,7 +52,6 @@ test('control stream catchup happens before choosing a legacy history backend', 
           backend: 'roost',
           machineId: 'm1',
           incremental: true,
-          watch: true,
           acceptsInput: true,
           dispatchesInput: true,
         }
@@ -70,15 +74,7 @@ test('control stream catchup happens before choosing a legacy history backend', 
       doc.commit();
       caughtUp = true;
     },
-    async onRpc(request, runtime, signal) {
-      if (request.method === 'session/history-watch')
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('cancelled')),
-            { once: true },
-          ),
-        );
+    async onRpc(request, runtime) {
       const params = await runtime.openPayload(request.params);
       reads.push(params.query.kind);
       return {
@@ -116,7 +112,7 @@ test(
     const controlRead = Promise.withResolvers();
     const controlRetry = Promise.withResolvers();
     const controlFailed = Promise.withResolvers();
-    const historyWatch = Promise.withResolvers();
+    const nextHistory = Promise.withResolvers();
     const liveAfterRecovery = Promise.withResolvers();
     const eventsWhileControlUnavailable = [];
     let revision = 1;
@@ -154,29 +150,24 @@ test(
           liveAfterRecovery.resolve();
         }
       },
-      async onRpc(request, runtime, signal) {
-        const { query } = await runtime.openPayload(request.params);
-        let result, pageTurns;
-        if (query.kind === 'watchChanges') {
-          const response = Promise.withResolvers();
-          signal.addEventListener(
-            'abort',
-            () => response.reject(signal.reason),
-            { once: true },
-          );
-          if (query.checkpoint === 'c1') historyWatch.resolve(response.resolve);
-          result = await response.promise;
-        } else {
-          result = {
-            checkpoint: `c${revision}`,
-            startPosition: 0,
-            totalCount: 1,
-            rows: [{ position: 0, state: 'ready', turnId: 'assistant-1' }],
-            hasMoreOlder: false,
-            cursor: null,
-          };
-          pageTurns = [turn()];
-        }
+      onSubscription(request, runtime, signal) {
+        return historyPublications(
+          request,
+          runtime,
+          signal,
+          () => nextHistory.promise,
+        );
+      },
+      async onRpc(request, runtime) {
+        const result = {
+          checkpoint: `c${revision}`,
+          startPosition: 0,
+          totalCount: 1,
+          rows: [{ position: 0, state: 'ready', turnId: 'assistant-1' }],
+          hasMoreOlder: false,
+          cursor: null,
+        };
+        const pageTurns = [turn()];
         return {
           result: await runtime.sealPayload('s1', {
             type: 'session/history-read_response',
@@ -198,13 +189,22 @@ test(
     controlUnavailable = true;
     controlRead.resolve({ ok: false, result: { code: 'network_error' } });
     await controlFailed.promise;
+    assert.equal(fixture.events.at(-1).controlReady, false);
+    assert.equal(fixture.events.at(-1).sendReady, false);
 
     revision = 2;
-    (await historyWatch.promise)({
-      state: 'ready',
-      checkpoint: 'c2',
-      ids: ['assistant-1'],
-      bodies: { changed: [turn()], suffix: [] },
+    nextHistory.resolve({
+      type: 'session/history-read_response',
+      sessionId: 's1',
+      success: true,
+      historyRevision: 2,
+      historyCount: 1,
+      result: {
+        state: 'ready',
+        checkpoint: 'c2',
+        ids: ['assistant-1'],
+        bodies: { changed: [turn()], suffix: [] },
+      },
     });
     // A retained session open flushes its current projection. Advance the test
     // only after that projection contains the owner's new history.
@@ -228,6 +228,252 @@ test(
   },
 );
 
+test(
+  'Roost subscription loss clears live but keeps commands on the installed transcript',
+  { timeout: 8000 },
+  async (t) => {
+    const loseHistory = Promise.withResolvers();
+    const catchUpStarted = Promise.withResolvers();
+    const allowCatchUp = Promise.withResolvers();
+    const caughtUp = Promise.withResolvers();
+    const firstPublication = Promise.withResolvers();
+    const firstSync = Promise.withResolvers();
+    const events = [];
+    const stopped = [];
+    let openings = 0;
+    const turn = (finished) => ({
+      id: 'assistant-1',
+      role: 'assistant',
+      timestamp: '2026-01-01T00:00:00Z',
+      finished,
+      items: [{ type: 'text', text: finished ? 'Finished' : 'Working' }],
+    });
+    const fixture = await openTestSession({
+      target: { backend: 'roost', machineId: 'm1' },
+      readyWhen: (snapshot) => snapshot.sendReady === true,
+      onEvent(event) {
+        if (event.type !== 'session') return;
+        const session = JSON.parse(event.session);
+        events.push({ synced: event.synced, session });
+        if (event.synced) firstSync.resolve();
+        if (event.synced && session.entries[0]?.finished) caughtUp.resolve();
+      },
+      async *onSubscription(request, runtime, signal) {
+        const { subscription } = await runtime.openPayload(request.params);
+        assert.equal(subscription.checkpoint, 'c1');
+        const revision = ++openings;
+        if (revision === 1) await firstPublication.promise;
+        yield {
+          result: await runtime.sealPayload('s1', {
+            type: 'session/history-subscription_response',
+            sessionId: 's1',
+            subscriptionId: subscription.id,
+            event: 'publication',
+            publication: { checkpoint: 'c' + revision, revision },
+          }),
+        };
+        if (revision === 1) {
+          await loseHistory.promise;
+          throw new Error('network_error');
+        }
+        await new Promise((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', resolve, { once: true });
+        });
+      },
+      async onRpc(request, runtime) {
+        if (request.method === 'session/cancel') {
+          stopped.push(request.params.turnId);
+          return { result: { success: true } };
+        }
+        const { query } = await runtime.openPayload(request.params);
+        const read = {
+          type: 'session/history-read_response',
+          sessionId: 's1',
+          success: true,
+          historyCount: 1,
+        };
+        if (query.kind === 'readChanges') {
+          assert.equal(query.checkpoint, 'c1');
+          catchUpStarted.resolve();
+          await allowCatchUp.promise;
+          return {
+            result: await runtime.sealPayload('s1', {
+              ...read,
+              historyRevision: 2,
+              result: {
+                state: 'ready',
+                checkpoint: 'c2',
+                ids: ['assistant-1'],
+                bodies: { changed: [turn(true)], suffix: [] },
+              },
+            }),
+          };
+        }
+        assert.equal(query.kind, 'readLatestPage');
+        return {
+          result: await runtime.sealPayload('s1', {
+            ...read,
+            historyRevision: 1,
+            result: {
+              checkpoint: 'c1',
+              startPosition: 0,
+              totalCount: 1,
+              rows: [{ position: 0, state: 'ready', turnId: 'assistant-1' }],
+              hasMoreOlder: false,
+              cursor: null,
+            },
+            pageTurns: [turn(false)],
+          }),
+        };
+      },
+    });
+    t.after(() => {
+      firstPublication.resolve();
+      allowCatchUp.resolve();
+      fixture.close();
+    });
+    assert.equal(events.at(-1).synced, false);
+    assert.equal(events.at(-1).session.entries[0].finished, false);
+    assert.equal(events.at(-1).session.controlReady, true);
+    assert.equal(events.at(-1).session.sendReady, true);
+    const sent = await fixture.runtime.sendTurn({
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'codex',
+      text: 'Queue while the subscription opens',
+    });
+    assert.equal(sent.state, 'queued');
+    assert.equal(fixture.server.toJSON().mq[0].userTurnId, sent.id);
+    assert.ok(events.every(({ synced }) => !synced));
+    firstPublication.resolve();
+    await firstSync.promise;
+    const beforeLoss = events.length;
+    loseHistory.resolve();
+    await catchUpStarted.promise;
+    await fixture.reopen();
+    assert.equal(events.at(-1).synced, false);
+    assert.equal(events.at(-1).session.status, 'syncing');
+    assert.equal(events.at(-1).session.reason, 'network_error');
+    assert.equal(events.at(-1).session.sendReady, true);
+    assert.equal(events.at(-1).session.controlReady, true);
+    const stop = (turnId) =>
+      fixture.runtime.controlTurn({
+        action: 'stop',
+        sessionId: 's1',
+        machineId: 'm1',
+        turnId,
+      });
+    await assert.rejects(stop('unobserved-turn'), /stale_turn/);
+    assert.deepEqual(await stop('assistant-1'), { state: 'stopped' });
+    assert.deepEqual(stopped, ['assistant-1']);
+    assert.ok(events.slice(beforeLoss).every(({ synced }) => !synced));
+    allowCatchUp.resolve();
+    await caughtUp.promise;
+    assert.equal(events.at(-1).session.entries[0].finished, true);
+  },
+);
+
+test('paged Roost reads share their scoped proof and renew it once on owner denial', async () => {
+  const proofs = [];
+  const received = [];
+  let revoked = false;
+  let current = true;
+  let minimumProof = 1;
+  const fixture = await openTestSession({
+    async onRpc(request, runtime) {
+      const params = await runtime.openPayload(request.params);
+      received.push(params);
+      if (request.method === 'session/history-write') {
+        assert.equal(request.id, proofs.at(-1).requestId);
+        return {
+          result: await runtime.sealPayload('s1', {
+            type: 'session/history-write_response',
+            sessionId: 's1',
+            success: true,
+            operation: params.operation,
+            result: true,
+          }),
+        };
+      }
+      if (revoked || Number(params.readProof.split('-').at(-1)) < minimumProof)
+        return { error: { code: 'session_history_read_denied' } };
+      return {
+        result: await runtime.sealPayload('s1', {
+          type: 'session/history-read_response',
+          sessionId: 's1',
+          success: true,
+          historyRevision: 1,
+          historyCount: 1500,
+          result: [params.query.from, params.query.to],
+        }),
+      };
+    },
+  });
+  try {
+    const transport = fixture.runtime.createRoostHistoryTransport({
+      workspaceId: 'w1',
+      machineId: 'm1',
+      sessionId: 's1',
+      signal: new AbortController().signal,
+      isCurrent: () => current,
+      getGrant: async () => ({
+        token: 'synthetic',
+        gatewayBaseUrl: 'https://x.invalid',
+      }),
+      async getHistoryProof(intent) {
+        assert.deepEqual(
+          [intent.workspaceId, intent.machineId, intent.sessionId],
+          ['w1', 'm1', 's1'],
+        );
+        proofs.push(intent);
+        return intent.requestId ? 'scoped-write' : 'read-' + proofs.length;
+      },
+    });
+    const page = (from) =>
+      transport.read({
+        kind: 'readRange',
+        from,
+        to: from + 500,
+        atCheckpoint: 'checkpoint-1',
+      });
+    assert.deepEqual((await page(0)).result, [0, 500]);
+    assert.deepEqual((await page(500)).result, [500, 1000]);
+    assert.deepEqual(
+      received.map((p) => p.readProof),
+      ['read-1', 'read-1'],
+    );
+    minimumProof = 2;
+    assert.deepEqual((await page(1000)).result, [1000, 1500]);
+    assert.deepEqual(
+      received.slice(2).map((p) => p.readProof),
+      ['read-1', 'read-2'],
+    );
+    assert.equal(
+      received[2].query.atCheckpoint,
+      received[3].query.atCheckpoint,
+    );
+    await transport.write('respond_permission', {
+      requestId: 'synthetic-permission',
+    });
+    assert.equal(received.at(-1).writeProof, 'scoped-write');
+    assert.equal(typeof proofs.at(-1).intentDigest, 'string');
+    revoked = true;
+    await assert.rejects(page(0), /session_history_read_denied/);
+    assert.deepEqual(
+      received.slice(-2).map((p) => p.readProof),
+      ['read-2', 'read-4'],
+    );
+    current = false;
+    await assert.rejects(page(0), /workspace_changed/);
+    assert.equal(proofs.length, 4);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('Roost sessions read, observe and send through the owning machine', async () => {
   const turn = (text) => ({
     id: 'old',
@@ -237,7 +483,8 @@ test('Roost sessions read, observe and send through the owning machine', async (
     items: [{ type: 'text', text }],
   });
   const requests = [];
-  let wakeWatch;
+  const next = Promise.withResolvers();
+  const subscribed = Promise.withResolvers();
   let receiptAtAcceptance;
   let accepted;
   const acceptance = new Promise((resolve) => {
@@ -261,20 +508,18 @@ test('Roost sessions read, observe and send through the owning machine', async (
       acceptsInput: true,
       dispatchesInput: true,
     },
-    async onRpc(request, runtime, signal) {
+    onSubscription(request, runtime, signal) {
+      return historyPublications(request, runtime, signal, (open) => {
+        assert.equal(open.checkpoint, 'c1');
+        subscribed.resolve();
+        return next.promise;
+      });
+    },
+    async onRpc(request, runtime) {
       const params = await runtime.openPayload(request.params);
       requests.push({ method: request.method, params });
       let response;
-      if (request.method === 'session/history-watch') {
-        response = await new Promise((resolve, reject) => {
-          wakeWatch = resolve;
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('cancelled')),
-            { once: true },
-          );
-        });
-      } else if (request.method === 'session/history-read') {
+      if (request.method === 'session/history-read') {
         response = {
           type: 'session/history-read_response',
           sessionId: 's1',
@@ -358,7 +603,8 @@ test('Roost sessions read, observe and send through the owning machine', async (
       1,
     );
     assert.deepEqual(fixture.server.toJSON().history ?? [], []);
-    wakeWatch({
+    await subscribed.promise;
+    next.resolve({
       type: 'session/history-read_response',
       sessionId: 's1',
       success: true,
@@ -399,7 +645,7 @@ for (const [indexedDBAvailable, incremental] of [
           backend: 'roost',
           machineId: 'm1',
           incremental,
-          watch: false,
+          live: false,
           acceptsInput: true,
           dispatchesInput: true,
         },
@@ -447,7 +693,7 @@ for (const [indexedDBAvailable, incremental] of [
         fixture.server.commit();
         await fixture.pushUpdate();
         await updated;
-        assert.equal(requests.includes('watchChanges'), false);
+        assert.equal(requests.includes('readLatestPage'), true);
       } finally {
         fixture.close();
       }
@@ -490,15 +736,7 @@ test('Roost retries the failed receipt upload before handing the same input to i
       }
       return false;
     },
-    async onRpc(request, runtime, signal) {
-      if (request.method === 'session/history-watch')
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('cancelled')),
-            { once: true },
-          ),
-        );
+    async onRpc(request, runtime) {
       const params = await runtime.openPayload(request.params);
       if (request.method === 'session/history-write') {
         writes.push({
@@ -984,13 +1222,7 @@ test(
         acceptsInput: true,
         dispatchesInput: true,
       },
-      async onRpc(request, runtime, signal) {
-        if (request.method === 'session/history-watch')
-          return new Promise((_resolve, reject) =>
-            signal.addEventListener('abort', () => reject(signal.reason), {
-              once: true,
-            }),
-          );
+      async onRpc(request, runtime) {
         if (request.method === 'session/history-write') {
           handoffStarted();
           throw new Error('lost_ack');
@@ -1074,15 +1306,7 @@ for (const steerResult of [
           calls.push({ kind: 'activate', args });
           finish();
         },
-        async onRpc(request, runtime, signal) {
-          if (request.method === 'session/history-watch')
-            return new Promise((_resolve, reject) =>
-              signal.addEventListener(
-                'abort',
-                () => reject(new Error('cancelled')),
-                { once: true },
-              ),
-            );
+        async onRpc(request, runtime) {
           if (request.method === 'session/steer') {
             calls.push({ kind: 'steer', params: request.params });
             return { result: steerResult };
@@ -1215,15 +1439,7 @@ test(
       markDispatch: async () => {
         calls.push('activate');
       },
-      async onRpc(request, runtime, signal) {
-        if (request.method === 'session/history-watch')
-          return new Promise((_resolve, reject) =>
-            signal.addEventListener(
-              'abort',
-              () => reject(new Error('cancelled')),
-              { once: true },
-            ),
-          );
+      async onRpc(request, runtime) {
         if (request.method === 'session/steer') {
           calls.push('steer');
           return { error: { code: 'timeout' } };
@@ -1313,17 +1529,9 @@ test('Roost permission decisions use the owner, and a lost send acknowledgement 
       acceptsInput: true,
       dispatchesInput: true,
     },
-    async onRpc(request, runtime, signal) {
+    async onRpc(request, runtime) {
       const params = await runtime.openPayload(request.params);
       requests.push({ method: request.method, params });
-      if (request.method === 'session/history-watch')
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('cancelled')),
-            { once: true },
-          ),
-        );
       if (params.operation === 'accept_input_and_dispatch') {
         handedOff();
         throw new Error('lost_ack');
@@ -1524,17 +1732,9 @@ test('Roost exports the full history before paging and leaves the shared queue o
       dispatchesInput: true,
     },
     markDispatch: async (...args) => dispatches.push(args),
-    async onRpc(request, runtime, signal) {
+    async onRpc(request, runtime) {
       const params = await runtime.openPayload(request.params);
       requests.push({ method: request.method, params });
-      if (request.method === 'session/history-watch')
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('cancelled')),
-            { once: true },
-          ),
-        );
       const latest = params.query.kind === 'readLatestPage';
       const position = latest ? 1 : 0;
       const turn = latest ? running : first;
@@ -1615,10 +1815,8 @@ for (const invalidPatch of [false, true]) {
     { timeout: 5000 },
     async () => {
       const reads = [];
-      let watchReady, resolveWatch;
-      const watching = new Promise((resolve) => {
-        watchReady = resolve;
-      });
+      const openReady = Promise.withResolvers();
+      const next = Promise.withResolvers();
       const turn = (text) => ({
         id: 'turn',
         role: 'assistant',
@@ -1633,22 +1831,16 @@ for (const invalidPatch of [false, true]) {
           dispatchesInput: true,
           patches: true,
         },
-        async onRpc(request, runtime, signal) {
+        onSubscription(request, runtime, signal) {
+          return historyPublications(request, runtime, signal, (open) => {
+            openReady.resolve(open);
+            return next.promise;
+          });
+        },
+        async onRpc(request, runtime) {
           const params = await runtime.openPayload(request.params);
           const query = params.query;
           reads.push(query);
-          if (request.method === 'session/history-watch') {
-            const response = await new Promise((resolve, reject) => {
-              resolveWatch = resolve;
-              watchReady();
-              signal.addEventListener(
-                'abort',
-                () => reject(new Error('cancelled')),
-                { once: true },
-              );
-            });
-            return { result: await runtime.sealPayload('s1', response) };
-          }
           const response =
             query.kind === 'readTurn'
               ? {
@@ -1680,9 +1872,9 @@ for (const invalidPatch of [false, true]) {
         },
       });
       try {
-        await watching;
+        const open = await openReady.promise;
         const updated = fixture.nextEmit();
-        resolveWatch({
+        next.resolve({
           type: 'session/history-read_response',
           sessionId: 's1',
           success: true,
@@ -1718,9 +1910,10 @@ for (const invalidPatch of [false, true]) {
         });
         const event = await updated;
         assert.equal(event.entries[0].items[0].text, 'ACB');
+        assert.equal(open.withPatches, true);
         assert.equal(
-          reads.find((query) => query.kind === 'watchChanges').withPatches,
-          true,
+          reads.some((query) => query.kind === 'readChanges'),
+          false,
         );
         const repair = reads.find((query) => query.kind === 'readTurn');
         if (invalidPatch) assert.equal(repair.atCheckpoint, 'c2');
@@ -1764,17 +1957,9 @@ test(
         acceptsInput: true,
         dispatchesInput: true,
       },
-      async onRpc(request, runtime, signal) {
+      async onRpc(request, runtime) {
         const params = await runtime.openPayload(request.params);
         requests.push({ method: request.method, params });
-        if (request.method === 'session/history-watch')
-          return new Promise((_resolve, reject) =>
-            signal.addEventListener(
-              'abort',
-              () => reject(new Error('cancelled')),
-              { once: true },
-            ),
-          );
         let result, pageTurns;
         if (params.operation) {
           handedOff();
@@ -1899,15 +2084,7 @@ for (const accepted of [true, false, 'inactive', 'storage-failed']) {
           acceptsInput: true,
           dispatchesInput: true,
         },
-        async onRpc(request, runtime, signal) {
-          if (request.method === 'session/history-watch')
-            return new Promise((_resolve, reject) =>
-              signal.addEventListener(
-                'abort',
-                () => reject(new Error('cancelled')),
-                { once: true },
-              ),
-            );
+        async onRpc(request, runtime) {
           if (request.method === 'session/steer') {
             calls.push({ kind: 'steer', queue: fixture.server.toJSON().mq });
             return { result: { applied: true } };
@@ -2073,15 +2250,7 @@ test(
         acceptsInput: true,
         dispatchesInput: true,
       },
-      async onRpc(request, runtime, signal) {
-        if (request.method === 'session/history-watch')
-          return new Promise((_resolve, reject) =>
-            signal.addEventListener(
-              'abort',
-              () => reject(new Error('cancelled')),
-              { once: true },
-            ),
-          );
+      async onRpc(request, runtime) {
         if (request.method === 'session/cancel') {
           cancels.push(request.params.turnId);
           return { result: { success: true } };
@@ -2216,16 +2385,8 @@ test('Roost input is refused before writes when the owner lacks dispatch capabil
       dispatchesInput: false,
       isCurrent: () => current,
     },
-    async onRpc(request, runtime, signal) {
+    async onRpc(request, runtime) {
       requests.push(request.method);
-      if (request.method === 'session/history-watch')
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('cancelled')),
-            { once: true },
-          ),
-        );
       return {
         result: await runtime.sealPayload('s1', {
           type: 'session/history-read_response',
@@ -2297,17 +2458,9 @@ for (const observed of [true, false]) {
         acceptsInput: true,
         dispatchesInput: true,
       },
-      async onRpc(request, runtime, signal) {
+      async onRpc(request, runtime) {
         const params = await runtime.openPayload(request.params);
         calls.push({ method: request.method, params });
-        if (request.method === 'session/history-watch')
-          return new Promise((_resolve, reject) =>
-            signal.addEventListener(
-              'abort',
-              () => reject(new Error('cancelled')),
-              { once: true },
-            ),
-          );
         if (request.method === 'session/history-write') {
           if (
             calls.filter((call) => call.method === 'session/history-write')
@@ -4714,15 +4867,7 @@ test(
         acceptsInput: true,
         dispatchesInput: true,
       },
-      async onRpc(request, runtime, signal) {
-        if (request.method === 'session/history-watch')
-          return new Promise((_resolve, reject) =>
-            signal.addEventListener(
-              'abort',
-              () => reject(new Error('cancelled')),
-              { once: true },
-            ),
-          );
+      async onRpc(request, runtime) {
         const params = await runtime.openPayload(request.params);
         if (params.operation === 'accept_input_and_dispatch') {
           writes.push(structuredClone(params.payload.entry));

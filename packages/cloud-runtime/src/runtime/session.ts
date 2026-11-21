@@ -12,7 +12,7 @@ import {
 } from './project';
 import type { SteerReceipt } from './execution';
 import { machineRpc, type RpcReply } from './machine-rpc';
-import type { RoostWindow } from './roost-history';
+import type { HistoryProofBroker, RoostWindow } from './roost-history';
 import {
   createUpstreamRoostHistory,
   roostStorageAccount,
@@ -66,7 +66,8 @@ export type SessionTarget =
       accountId?: string | null;
       machineId: string;
       incremental: boolean;
-      watch: boolean;
+      live: boolean;
+      getHistoryProof: HistoryProofBroker;
       acceptsInput: boolean;
       dispatchesInput: boolean;
       latestUserMsgId?: string;
@@ -92,6 +93,8 @@ type SessionState = {
   target?: SessionTarget;
   scopeIsCurrent?: () => boolean;
   historyReady?: boolean;
+  historyReadable?: boolean;
+  historySubscriptionFailure?: string;
   streamReady?: boolean;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
@@ -140,7 +143,7 @@ type SessionState = {
     queued?: boolean,
   ) => Promise<void>;
   emit: (event: SessionRuntimeEvent) => void;
-  liveWaiters?: Array<(error?: Error) => void>;
+  controlWaiters?: Array<(error?: Error) => void>;
   read?: { stage: ReadStage; startedAt: number; stalled?: boolean };
   readFailures: number;
 };
@@ -194,7 +197,7 @@ export function startAcceptedInputs(options: {
           const target = resolveTarget();
           if (
             !state ||
-            !state.ready ||
+            !sessionControlsReady(state) ||
             !state.roostReader ||
             !targetIsCurrent(state)
           )
@@ -212,7 +215,7 @@ export function startAcceptedInputs(options: {
           const store: MobileSendStore = {
             sessionData,
             waitUntilSynced: (signal = owned) =>
-              waitForSessionReady(state, signal),
+              waitForSessionControls(state, signal),
             getState: () => (staged ?? state.doc).toJSON(),
             setState: (change) => {
               const doc = (staged ??= state.doc.fork());
@@ -409,6 +412,15 @@ const targetIsCurrent = (state: SessionState) =>
   (state.target?.backend !== 'roost' ||
     !state.target.isCurrent ||
     state.target.isCurrent());
+const sessionControlsReady = (state: SessionState) =>
+  !state.controller.signal.aborted &&
+  state.status !== 'offline' &&
+  (state.target?.backend === 'roost'
+    ? state.streamReady === true && state.historyReadable === true
+    : state.ready);
+const sessionSendReady = (state: SessionState) =>
+  sessionControlsReady(state) &&
+  (state.target?.backend !== 'roost' || state.roostMetadata !== undefined);
 const sessionGrant = async (state: SessionState) => {
   if (!targetIsCurrent(state)) throw new Error('workspace_changed');
   const grant = await state.getGrant();
@@ -798,7 +810,7 @@ function signalOf(state: SessionState, status: string) {
       finished++;
   }
   const awaiting = state.doc.getMap('session').get('awaitingUserSince') != null;
-  return `${status}|${awaiting}|${finished}`;
+  return `${status}|${awaiting}|${finished}|${sessionControlsReady(state)}|${sessionSendReady(state)}`;
 }
 function backgroundStatus(
   state: SessionState,
@@ -882,6 +894,8 @@ function flush(state: SessionState) {
   };
   snapshot = finish(snapshot);
   if (state.target?.backend === 'roost') {
+    snapshot.controlReady = sessionControlsReady(state);
+    snapshot.sendReady = sessionSendReady(state);
     snapshot.historyHasMore = !!state.roostWindow?.cursor;
     snapshot.historyLoading = state.roostLoading === true;
     const pending = (acceptedInputs?.getSnapshot() ?? []).filter(
@@ -958,6 +972,7 @@ function isWorking(state: SessionState) {
   return false;
 }
 function scheduleEmit(state: SessionState, status: string, reason?: string) {
+  if (status === 'syncing') reason ??= state.historySubscriptionFailure;
   if (status !== state.status && sessions.get(state.id) === state)
     trace(state, 'status', { status, code: traceCode(reason) });
   state.status = status;
@@ -989,13 +1004,13 @@ function scheduleEmit(state: SessionState, status: string, reason?: string) {
   if (!state.firstQueuedAt) state.firstQueuedAt = now;
   state.pending = setTimeout(() => flush(state), foreground ? 100 : 1000);
 }
-function settleLive(state: SessionState, error?: Error) {
-  const waiters = state.liveWaiters;
-  state.liveWaiters = undefined;
+function settleControls(state: SessionState, error?: Error) {
+  const waiters = state.controlWaiters;
+  state.controlWaiters = undefined;
   waiters?.forEach((waiter) => waiter(error));
 }
 function evict(state: SessionState) {
-  settleLive(state, new Error('session_not_ready'));
+  settleControls(state, new Error('session_not_ready'));
   // Publish completion before retiring an idle replica's background allowance.
   if (state.ready) flush(state);
   if (state.backgroundWork) {
@@ -1053,7 +1068,7 @@ export function releaseReserve(id: string) {
 }
 export function stopSessions() {
   for (const state of sessions.values()) {
-    settleLive(state, new Error('session_not_ready'));
+    settleControls(state, new Error('session_not_ready'));
     clearTimeout(state.pending);
     state.controller.abort();
   }
@@ -1113,23 +1128,28 @@ export async function ensureSession(
   );
   const state = sessions.get(id);
   if (!state) throw new Error('session_not_ready');
-  await waitForSessionReady(state, signal);
+  await waitForSessionControls(state, signal);
   return result;
 }
 
-async function waitForSessionReady(state: SessionState, signal?: AbortSignal) {
+async function waitForSessionControls(
+  state: SessionState,
+  signal?: AbortSignal,
+) {
   signal?.throwIfAborted();
   state.controller.signal.throwIfAborted();
-  if (state.ready) return;
+  if (sessionControlsReady(state)) return;
   await new Promise<void>((resolve, reject) => {
     const abort = () => done(signal!.reason ?? new Error('cancelled'));
     const done = (error?: Error) => {
-      state.liveWaiters = state.liveWaiters?.filter((item) => item !== done);
+      state.controlWaiters = state.controlWaiters?.filter(
+        (item) => item !== done,
+      );
       signal?.removeEventListener('abort', abort);
       if (error) reject(error);
       else resolve();
     };
-    (state.liveWaiters ??= []).push(done);
+    (state.controlWaiters ??= []).push(done);
     signal?.addEventListener('abort', abort, { once: true });
   });
 }
@@ -1206,14 +1226,17 @@ export async function openSession(
     retrying(error);
   };
   const retryHistory = (error: unknown) => {
+    state.historyReadable = false;
     state.historyReady = false;
     retrying(error);
   };
   const updateReadiness = () => {
     state.ready =
+      state.status !== 'offline' &&
       state.streamReady === true &&
-      (state.target?.backend !== 'roost' || state.historyReady === true);
-    if (state.ready) settleLive(state);
+      (state.target?.backend !== 'roost' ||
+        (state.historyReadable === true && state.historyReady === true));
+    if (sessionControlsReady(state)) settleControls(state);
   };
   event('syncing');
   void (async () => {
@@ -1308,6 +1331,20 @@ export async function openSession(
       if (sessions.get(id) !== state) return;
       state.target = target;
       if (target.backend === 'roost') {
+        const liveHistory = target.live;
+        let ownerCheckpoint: string | undefined;
+        const confirmHistory = () => {
+          if (
+            !liveHistory ||
+            (ownerCheckpoint &&
+              ownerCheckpoint === state.roostWindow?.checkpoint)
+          ) {
+            state.historyReady = true;
+            state.historySubscriptionFailure = undefined;
+          }
+          updateReadiness();
+          event(state.ready ? 'live' : 'syncing');
+        };
         const reader = createUpstreamRoostHistory({
           accountId: target.accountId,
           workspaceId: workspace,
@@ -1319,7 +1356,25 @@ export async function openSession(
           patches: target.patches,
           coherentInspection: target.coherentInspection,
           incremental: target.incremental,
-          watch: target.watch,
+          live: target.live,
+          getHistoryProof: target.getHistoryProof,
+          onSubscription: (observation) => {
+            if (
+              controller.signal.aborted ||
+              sessions.get(id) !== state ||
+              state.status === 'offline'
+            )
+              return;
+            if ('reason' in observation) {
+              ownerCheckpoint = undefined;
+              state.historySubscriptionFailure = observation.reason;
+              state.historyReady = false;
+              retrying(new Error(observation.reason));
+            } else {
+              ownerCheckpoint = observation.checkpoint;
+              if (!state.historyReady) confirmHistory();
+            }
+          },
         });
         state.roostReader = reader;
         let window = await retrySessionRead(
@@ -1329,6 +1384,7 @@ export async function openSession(
         );
         if (sessions.get(id) !== state) return;
         installHistory(state, window);
+        state.historyReadable = true;
         let metadataRevision = 0;
         let metadataController: AbortController | undefined;
         const refreshMetadata = () => {
@@ -1361,7 +1417,7 @@ export async function openSession(
         };
         refreshMetadata();
         reader.metadataChanged(state.roostMetadata);
-        state.historyReady = true;
+        confirmHistory();
         void (async () => {
           try {
             while (!controller.signal.aborted) {
@@ -1387,14 +1443,18 @@ export async function openSession(
               );
               if (reader.metadataChanged(state.roostMetadata))
                 refreshMetadata();
-              state.historyReady = true;
-              updateReadiness();
-              if (state.ready) event('live');
+              state.historyReadable = true;
+              confirmHistory();
             }
           } catch (error) {
             if (!controller.signal.aborted && sessions.get(id) === state) {
               state.historyReady = false;
+              state.historyReadable = false;
               state.ready = false;
+              settleControls(
+                state,
+                error instanceof Error ? error : new Error('history_failed'),
+              );
               event(
                 'offline',
                 error instanceof Error ? error.message : 'history_failed',
@@ -1448,7 +1508,7 @@ export async function openSession(
       }
     } catch (error) {
       const failed = error instanceof Error ? error : new Error('sync_failed');
-      settleLive(state, failed);
+      settleControls(state, failed);
       if (controller.signal.aborted || sessions.get(id) !== state) return;
       state.streamReady = false;
       state.ready = false;
@@ -1498,7 +1558,7 @@ export function checkTurnQuota(args: {
   billingEntitlement?: BillingEntitlement | null;
 }): CheckTurnQuotaResult {
   const state = sessions.get(args.sessionId);
-  if (!state?.ready) return { state: 'allowed' };
+  if (!state || !sessionSendReady(state)) return { state: 'allowed' };
   let count: number | null = billableTurnCount(snapshot(state));
   if (state.target?.backend === 'roost') {
     count = state.roostMetadata
@@ -1549,12 +1609,10 @@ export async function sendTurn(
     Array.isArray(ids) ? ids : [],
 ): Promise<SendTurnResult> {
   const state = sessions.get(args.sessionId);
-  if (!state || !state.ready)
+  if (!state || !sessionSendReady(state))
     return { state: 'not_sent', reason: 'session_not_ready' };
   if (!targetIsCurrent(state))
     return { state: 'not_sent', reason: 'workspace_changed' };
-  if (state.target?.backend === 'roost' && !state.roostMetadata)
-    return { state: 'not_sent', reason: 'session_not_ready' };
   if (
     args.id !== undefined &&
     (typeof args.id !== 'string' ||
@@ -1656,7 +1714,7 @@ export async function sendTurn(
     const expanded = await expand(text);
     text = typeof expanded === 'string' ? expanded : expanded.text;
     const spans = typeof expanded === 'string' ? undefined : expanded.spans;
-    if (sessions.get(state.id) !== state || !state.ready)
+    if (sessions.get(state.id) !== state || !sessionControlsReady(state))
       throw new Error('session_not_ready');
     if (text.length > 32000) throw new Error('invalid_message');
     const previous =
@@ -1705,7 +1763,7 @@ export async function sendTurn(
         () => sessionGrant(state),
         AbortSignal.any([state.controller.signal, AbortSignal.timeout(30000)]),
       );
-      if (sessions.get(state.id) !== state || !state.ready)
+      if (sessions.get(state.id) !== state || !sessionControlsReady(state))
         throw new Error('session_not_ready');
       const applied = roleRunConfigApplied(role.runConfig, {
         modelId:
@@ -1721,7 +1779,7 @@ export async function sendTurn(
         Array.isArray(item.acpSessionConfig?.mcpServerIds),
       )?.acpSessionConfig.mcpServerIds ?? previous.mcpServerIds,
     );
-    if (sessions.get(state.id) !== state || !state.ready)
+    if (sessions.get(state.id) !== state || !sessionControlsReady(state))
       throw new Error('session_not_ready');
     const inputConfig = {
       cliType: args.cliType,
@@ -1900,7 +1958,7 @@ export async function sendTurn(
         if (!result.ok) throw new Error(result.result.code);
         uploaded = true;
         await state.markDispatch(state.id, id, true);
-        scheduleEmit(state, 'live');
+        scheduleEmit(state, state.status);
         return { id, state: 'queued' };
       };
       if (state.target?.backend === 'roost') {
@@ -2099,7 +2157,12 @@ export async function controlTurn(args: {
   interrupt?: boolean;
 }): Promise<ControlTurnResult> {
   const state = active;
-  if (!state || state.id !== args.sessionId || !state.ready || state.sending)
+  if (
+    !state ||
+    state.id !== args.sessionId ||
+    !sessionControlsReady(state) ||
+    state.sending
+  )
     throw new Error('session_not_ready');
   if (!targetIsCurrent(state)) throw new Error('workspace_changed');
   if (

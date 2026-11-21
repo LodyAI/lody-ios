@@ -28,24 +28,40 @@ protocol, write ordering, uncertain delivery and recovery checks.
 ## Roost sessions
 
 The Developer Mode / Roost History beta preference selects Roost for new sessions
-only when the owner advertises `sessionHistory` v3, using the pinned upstream
+only when the owner advertises `sessionHistory` v4, using the pinned upstream
 `resolveNewSessionHistoryBackend` policy. The preference is off by default;
 unsupported machines create Loro sessions. The resulting backend is written in
 session metadata and never changed by this preference. New Tabs use the same
 selection policy.
 
 The session's metadata selects its history backend. For Roost, the runtime waits
-for the owner and its `sessionHistory` v3 capability, and negotiates incremental
-reads, watches and patches separately. An existing nonempty Loro history can open
+for the owner and its `sessionHistory` v4 capability, and negotiates incremental
+reads, subscriptions and patches separately. An existing nonempty Loro history can open
 without metadata after control-stream catchup; an explicitly Roost session or a
 retired Roost cursor never takes that fallback. The pinned upstream Roost bridge
 and history cache read and observe history, capture sharing snapshots, and submit
 permission responses through the encrypted owner RPC. The control document
 carries the shared queue and human-input receipts.
 
+The owner publishes committed checkpoints over the reply stream for
+`session/history-subscribe`. The native runtime consumes that stream using
+Streams long-poll. The upstream reader applies inline deltas at their
+exact cached base and requests missing intervals from its last applied checkpoint.
+A renewed lease resumes from that same durable checkpoint. The runtime obtains
+scoped read and intent-bound write proofs through the native `historyToken`
+broker. Reads of the same session reuse a proof for up to 30 seconds and renew a
+reused proof once if the owner denies it. The owner checks current access on every
+read. Subscription leases and writes request their own proofs. The account
+credential stays native.
+
 Both the control stream and owner history must be ready before the runtime
 reports a Roost session as live. A failed read clears that reader's readiness
-until it recovers, while the other reader can continue.
+while the other reader continues. After a history subscription failure, live
+readiness requires a fresh owner checkpoint that the transcript has loaded.
+With the control stream caught up and a readable history window installed, Stop
+and Steer can target the known turn while the subscription reconnects. Sending
+also requires the session's history metadata. These commands keep their existing
+owner checks. The host displays the sync status independently of command readiness.
 
 The iOS runtime package holds the authoring source in `vendor/upstream-roost`.
 The iOS asset build verifies the generated `src/runtime/upstream-roost.js` against
