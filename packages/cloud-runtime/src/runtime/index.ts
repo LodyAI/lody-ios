@@ -24,6 +24,7 @@ import {
   catalogBootstrapSlots,
 } from './catalog-sync';
 import { watchMachinePresence } from './machine-presence';
+import { pinSectionRows, WORKSPACE_STREAM } from './status-view.ts';
 import { unknownPresence } from '../models/machines.ts';
 import type {
   Grant,
@@ -42,6 +43,7 @@ import { registerSettings } from './handlers/settings.ts';
 import { registerSchedules } from './handlers/schedules.ts';
 import { registerProposals } from './handlers/proposals.ts';
 import { registerSharing } from './handlers/sharing.ts';
+import { registerStatusView } from './handlers/status-view.ts';
 const host = (globalThis as any).webkit.messageHandlers.dataRuntime;
 const send = (message: object) => host.postMessage(message);
 const channel = createChannel(
@@ -114,6 +116,8 @@ const state: RuntimeState = {
   machineReplicas: new Map(),
   catalogs: new Map(),
   unhealthy: new Set(),
+  workspaceReplica: undefined,
+  pinSections: { sections: [], loaded: false },
 };
 const { machineReplicas, catalogs, unhealthy } = state;
 let stopPresence: (() => void) | undefined;
@@ -252,7 +256,7 @@ function publish() {
 function publishNow() {
   const meta = catalogs.get('meta');
   if (!meta) return;
-  const expected = new Set(['meta', ...meta.machineIds]);
+  const expected = new Set(['meta', WORKSPACE_STREAM, ...meta.machineIds]);
   for (const [id, controller] of watchers)
     if (!expected.has(id)) {
       controller.abort();
@@ -263,6 +267,7 @@ function publishNow() {
     }
   for (const machine of meta.machineIds)
     if (!watchers.has(machine)) watch(machine);
+  if (!watchers.has(WORKSPACE_STREAM)) watch(WORKSPACE_STREAM);
   refreshSessionUsage();
   channel.emit('creationOptionsChanged', {});
   if (unhealthy.has('meta')) return;
@@ -311,6 +316,13 @@ function publishNow() {
   channel.emit('synced', { revision, streams: watchers.size });
 }
 function watch(mode: string) {
+  // The workspace settings stream only feeds pin sections: its health never
+  // gates machines, files or the catalog (`unhealthy`), and it keeps the last
+  // sections through failures.
+  const workspaceStream = mode === WORKSPACE_STREAM;
+  const markUnhealthy = () => {
+    if (!workspaceStream) unhealthy.add(mode);
+  };
   const controller = new AbortController();
   watchers.set(mode, controller);
   const { signal } = controller;
@@ -340,7 +352,9 @@ function watch(mode: string) {
         const stream =
           mode === 'meta'
             ? `${state.workspace}:meta`
-            : `${state.workspace}:mf:${mode}`;
+            : workspaceStream
+              ? `${state.workspace}:wf:workspace`
+              : `${state.workspace}:mf:${mode}`;
         const client = new StreamsClient({
           url: `${authorization.gatewayBaseUrl.replace(/\/$/, '')}/ds/lody/${encodeURIComponent(stream)}`,
           auth: async () => (await getGrant()).token,
@@ -352,7 +366,7 @@ function watch(mode: string) {
             pollTimeoutMs: 35000,
           },
         });
-        if (mode !== 'meta')
+        if (mode !== 'meta' && !workspaceStream)
           releaseBootstrap = await acquireCatalogBootstrap(signal);
         const checkpoint = catalogImportCheckpoint(signal);
         channel.emit('diagnostic', { stage: 'bootstrap', stream: mode });
@@ -365,6 +379,13 @@ function watch(mode: string) {
           stream: mode,
         });
         if (!initial.ok) {
+          if (initial.result.code === 'not_found' && workspaceStream) {
+            state.workspaceReplica = undefined;
+            state.pinSections = { sections: [], loaded: true };
+            publish();
+            await delay(30000, signal);
+            continue;
+          }
           if (initial.result.code === 'not_found' && mode !== 'meta') {
             unhealthy.delete(mode);
             catalogs.set(mode, { projects: [], sessions: [], machineIds: [] });
@@ -405,7 +426,24 @@ function watch(mode: string) {
         let pages = 0;
         let checkedWindow = false;
         while (!signal.aborted) {
-          if (upToDate) {
+          if (upToDate && workspaceStream) {
+            // A scope change mid-loop must not publish another workspace's sections.
+            if (stream !== `${state.workspace}:wf:workspace`)
+              throw new Error('workspace_changed');
+            caughtUp = true;
+            if (state.workspaceReplica?.flock !== flock)
+              state.workspaceReplica = { flock, client };
+            await checkpoint();
+            state.pinSections = {
+              sections: pinSectionRows(flock.scan({ prefix: ['pinSection'] })),
+              loaded: true,
+            };
+            publish();
+            checkedWindow = false;
+            failures = 0;
+            pages = 0;
+            size = 0;
+          } else if (upToDate) {
             caughtUp = true;
             if (mode === 'meta') {
               const first = !state.metaReplica;
@@ -474,7 +512,7 @@ function watch(mode: string) {
               return result;
             },
             (error) => {
-              unhealthy.add(mode);
+              markUnhealthy();
               channel.emit('creationOptionsChanged', {});
               reportError('network_or_auth');
               if (!(
@@ -504,7 +542,7 @@ function watch(mode: string) {
               throw new Error('catalog_rebootstrap');
             }
           }
-          if (next.payload?.body.length || !next.upToDate) unhealthy.add(mode);
+          if (next.payload?.body.length || !next.upToDate) markUnhealthy();
           if (next.payload) {
             size += next.payload.body.length;
             if (size > 16 * 1024 * 1024) throw new Error('catalog_limit');
@@ -524,8 +562,9 @@ function watch(mode: string) {
         releaseBootstrap();
         if (signal.aborted) return;
         if (mode === 'meta') state.metaReplica = undefined;
+        else if (workspaceStream) state.workspaceReplica = undefined;
         else machineReplicas.delete(mode);
-        unhealthy.add(mode);
+        markUnhealthy();
         channel.emit('creationOptionsChanged', {});
         const reason = error instanceof Error ? error.message : 'sync_failed';
         if (
@@ -584,6 +623,7 @@ registerProjects(ctx);
 registerSchedules(ctx);
 registerProposals(ctx);
 registerSharing(ctx);
+registerStatusView(ctx);
 registerContent(ctx);
 registerSessions(ctx, getMentions);
 registerDebug(ctx);

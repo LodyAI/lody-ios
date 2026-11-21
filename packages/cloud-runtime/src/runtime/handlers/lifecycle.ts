@@ -128,8 +128,11 @@ export function registerLifecycle(ctx: RuntimeContext) {
         await ctx.disposeProviderOperations?.();
       }
       if (version !== scopeStartVersion) return {};
-      if (workspaceId !== state.workspace || userId !== state.userId)
+      if (workspaceId !== state.workspace || userId !== state.userId) {
         stopSessions();
+        state.workspaceReplica = undefined;
+        state.pinSections = { sections: [], loaded: false };
+      }
       state.workspace = workspaceId;
       state.userId = userId;
       startAcceptedInputs({

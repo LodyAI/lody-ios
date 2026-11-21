@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/LodyAI/Lody",
+  "commit": "fe365abd3d542122b349ad361f874d6e68335de6",
+  "license": "AGPL-3.0-only",
+  "files": [
+    {
+      "path": "pinned-sections.ts",
+      "upstream": "packages/shared/src/pinned-sections.ts",
+      "sha256": "7f27f8f3349e7629d39e32609f3d1b41938009c78f8b32bb0e1987662da242da",
+      "adapt": [
+        [
+          "from './vendor/loro-fractional-index';",
+          "from './vendor/loro-fractional-index.ts';"
+        ]
+      ]
+    },
+    {
+      "path": "vendor/loro-fractional-index.ts",
+      "upstream": "packages/shared/src/vendor/loro-fractional-index.ts",
+      "sha256": "7b9ee055b6baf2c50106951001550636286638199db1e1a784ef29ffe06c0fe6",
+      "adapt": []
+    }
+  ]
+}
