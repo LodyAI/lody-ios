@@ -410,6 +410,7 @@ final class StatusLaterModel: ObservableObject {
 /// Later: the four presets, each with its resolved time, and a custom date and time in the same
 /// sheet. Past times are refused.
 private struct StatusLaterSheet: View {
+  @Environment(\.dynamicTypeSize) private var typeSize
   @ObservedObject var model: StatusLaterModel
   @State private var custom = Date().addingTimeInterval(3600)
   @State private var refused = false
@@ -432,24 +433,32 @@ private struct StatusLaterSheet: View {
     .tint(LodyColor.accentSolid)
   }
 
+  private var detailLayout: AnyLayout {
+    typeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: LodySpacing.xs))
+      : AnyLayout(HStackLayout())
+  }
+
   private var content: some View {
     VStack(alignment: .leading, spacing: LodySpacing.md) {
-      HStack {
+      detailLayout {
         Text(String(localized: "home.status.later", bundle: .lody)).lodyTextStyle(.headline).foregroundStyle(LodyColor.textPrimary)
-        Spacer()
+        if !typeSize.isAccessibilitySize { Spacer() }
         Button(String(localized: "common.cancel", bundle: .lody)) { model.dismiss() }
       }
       VStack(spacing: 0) {
         ForEach(model.presets, id: \.id) { preset in
           Button { model.pick(preset.timestamp) } label: {
-            HStack {
+            detailLayout {
               Text(String(localized: String.LocalizationValue(Self.titles[preset.id] ?? preset.id), bundle: .lody))
                 .lodyTextStyle(.body).foregroundStyle(LodyColor.textPrimary)
-              Spacer()
+                .fixedSize(horizontal: false, vertical: true)
+              if !typeSize.isAccessibilitySize { Spacer() }
               Text(StatusViewActions.resolved(preset.timestamp))
                 .lodyTextStyle(.footnote).foregroundStyle(LodyColor.textSecondary).monospacedDigit()
             }
-            .frame(minHeight: LodySize.listRow)
+            .frame(maxWidth: .infinity, minHeight: LodySize.listRow, alignment: .leading)
+            .padding(.vertical, typeSize.isAccessibilitySize ? LodySpacing.xs : 0)
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
@@ -462,12 +471,17 @@ private struct StatusLaterSheet: View {
         }
       }
       Divider()
-      DatePicker(
-        String(localized: "home.status.later.custom", bundle: .lody), selection: $custom, in: Date()...,
-        displayedComponents: [.date, .hourAndMinute]
-      )
-      .lodyTextStyle(.body)
-      .onChange(of: custom) { _ in refused = false }
+      if typeSize.isAccessibilitySize {
+        VStack(alignment: .leading, spacing: LodySpacing.xs) {
+          Text(customTitle)
+            .lodyTextStyle(.body)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityHidden(true)
+          datePicker.labelsHidden().accessibilityLabel(customTitle)
+        }
+      } else {
+        datePicker
+      }
       if refused {
         Text(String(localized: "home.status.later.past", bundle: .lody)).lodyTextStyle(.footnote).foregroundStyle(LodyColor.dangerDefault)
       }
@@ -484,5 +498,15 @@ private struct StatusLaterSheet: View {
       .buttonStyle(.borderedProminent)
       .accessibilityIdentifier("later-custom-confirm")
     }
+  }
+
+  private var customTitle: String {
+    String(localized: "home.status.later.custom", bundle: .lody)
+  }
+
+  private var datePicker: some View {
+    DatePicker(customTitle, selection: $custom, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+      .lodyTextStyle(.body)
+      .onChange(of: custom) { _ in refused = false }
   }
 }

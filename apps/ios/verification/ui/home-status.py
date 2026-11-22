@@ -40,12 +40,15 @@ for key, command in [('home.status.later', 'snooze'), ('home.status.settle', 'se
         ui.capture('later-presets')
         ui.axe('tap', *center(menu_action('home.status.later.oneHour')))
     ui.axe('tap', '--label', catalog.text(f'home.status.opened.{command}.all'))
-    ui.wait(lambda items: not any(item.get('AXUniqueId') == 'focus-a' for item in items),
-            'The conversation remained in Focus')
     undo = catalog.text('home.status.toast.undo')
-    ui.wait(lambda items: any(item.get('AXLabel') == undo for item in items), 'Missing Undo')
-    ui.screenshot(evidence)
-    ui.axe('tap', '--label', undo)
+
+    def undo_button(items):
+        if any(item.get('AXUniqueId') == 'focus-a' for item in items):
+            return None
+        return next((item for item in items if item.get('AXLabel') == undo and item.get('type') == 'Button'), None)
+
+    button = ui.wait(undo_button, 'The opener should leave Focus and show Undo')
+    ui.axe('tap', *center(button))
     ui.element('focus-a')
     ui.axe('tap', *center(ui.element('label:later')))
     assert ui.element('later-child')['AXValue'] == child_return, 'Undo did not restore the child’s original Later time'
@@ -68,7 +71,8 @@ def check_first(first_id, second_id):
         return (first['frame']['y'] < second['frame']['y']
                 and catalog.text('home.status.moveDown') in first['custom_actions']
                 and catalog.text('home.status.moveUp') not in first['custom_actions']
-                and catalog.text('home.status.moveUp') in second['custom_actions'])
+                and catalog.text('home.status.moveUp') in second['custom_actions']
+                and catalog.text('home.status.moveDown') in second['custom_actions'])
     ui.wait(ordered, f'Expected {first_id} first and refreshed accessibility actions')
 
 
