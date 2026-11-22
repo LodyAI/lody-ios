@@ -508,7 +508,6 @@ final class ChatListView: UIView, UICollectionViewDelegate {
     let pressed = archivedStyle ? LodyUIColor.fillSelected : LodyUIColor.fillPressed
     // The SwiftUI content is the row's one accessibility element (label, value, selection, actions);
     // the cell stays a container so VoiceOver and UI checks never find a second, unlabelled button.
-    cell.accessibilityIdentifier = entry.row.id
     cell.isAccessibilityElement = false
     cell.configurationUpdateHandler = { cell, state in
       var background = UIBackgroundConfiguration.clear()

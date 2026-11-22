@@ -66,7 +66,7 @@ def check_first(first_id, second_id):
             return False
         first, second = by_id[first_id], by_id[second_id]
         for row_id in (first_id, second_id):
-            assert sum(i.get('type') == 'Button' and i.get('AXLabel') == row_id for i in items) == 1, (
+            assert sum(i.get('AXUniqueId') == row_id for i in items) == 1, (
                 f'Expected one accessibility button for {row_id}')
         return (first['frame']['y'] < second['frame']['y']
                 and catalog.text('home.status.moveDown') in first['custom_actions']
@@ -78,10 +78,8 @@ def check_first(first_id, second_id):
 
 ui.axe('touch', *center(ui.element('focus-woken')), '--down', '--up', '--delay', '.85')
 ui.axe('tap', *center(menu_action('home.status.moveToTop')))
-check_first('focus-woken', 'focus-a')
 ui.open_case('status-catalog-repeat')
 check_first('focus-woken', 'focus-a')
-ui.capture('held-move')
 ui.open_case('status-catalog-readback')
 check_first('focus-woken', 'focus-a')
 ui.capture('read-back-move')
