@@ -448,6 +448,8 @@ struct StatusViewHold: Equatable, Sendable {
   /// The runtime accepted the write.
   var acknowledged = false
   var failed = false
+  /// Other local moves in flight can change a neighbour without moving this row.
+  var concurrentMoves: Set<String> = []
 
   init?(_ command: StatusViewCommand, base: StatusViewLayout) {
     guard case let .move(id, area, before) = command else { return nil }
@@ -470,7 +472,8 @@ struct StatusViewHold: Equatable, Sendable {
     for (name, rows) in [("focus", layout.focus), ("later", layout.later), ("settled", layout.settled)]
       + layout.pinned.map({ ("pinned:" + ($0.sectionId ?? ""), $0.rows) }) {
       if let position = rows.firstIndex(where: { $0.id == sessionId }) {
-        return name + ">" + (position + 1 < rows.count ? rows[position + 1].id : "")
+        let next = rows[(position + 1)...].first { !concurrentMoves.contains($0.id) }
+        return name + ">" + (next?.id ?? "")
       }
     }
     return ""

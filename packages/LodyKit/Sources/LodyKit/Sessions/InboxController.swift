@@ -179,16 +179,20 @@ final class InboxController: UIViewController {
       return
     }
     if archived {
-      list.setSections(InboxSections.archived(catalog, owner: HomeScope.stored == .mine ? state.userId : nil))
+      setSections(InboxSections.archived(catalog, owner: HomeScope.stored == .mine ? state.userId : nil), for: state)
       return
     }
     // Every size class groups by the view menu's choice (time / project / status).
     let owner = HomeScope.stored == .mine ? state.userId : nil
     // Layout times are on the server clock, so its rows age and count down against it.
-    list.setSections(InboxSections.home(
+    setSections(InboxSections.home(
       catalog, grouping: HomeGrouping.stored, owner: owner, layout: layout, settledExpanded: settledExpanded,
       now: layout == nil ? LodyRelativeTime.now() : StatusViewActions.now
-    ))
+    ), for: state)
+  }
+
+  private func setSections(_ sections: [LodyListSection], for state: SessionListState) {
+    list.setSections(StatusViewActions.readOnly(state) ? InboxSections.readOnly(sections) : sections)
   }
 
   // MARK: Status view
@@ -221,7 +225,7 @@ final class InboxController: UIViewController {
       return self.status.menu(id, from: self, reorders: self.movable(id))
     },
     canDrag: { [weak self] id in
-      guard let row = self?.shownLayout?.index[id] else { return false }
+      guard let self, self.movable(id), let row = self.shownLayout?.index[id] else { return false }
       return row.tier == .pinned ? row.canPrefer : row.canManage || row.canPrefer
     },
     drop: { [weak self] id, sectionId, beforeId in
@@ -245,7 +249,7 @@ final class InboxController: UIViewController {
   private func runMove(_ command: StatusViewCommand) {
     let state = source.state
     guard let base = state.catalog.statusView?.layout(team: HomeScope.stored == .team, readOnly: StatusViewActions.readOnly(state)),
-      let value = StatusViewHold(command, base: base)
+      var value = StatusViewHold(command, base: base)
     else {
       status.run(command)
       return
@@ -258,8 +262,13 @@ final class InboxController: UIViewController {
     holdGeneration += 1
     let generation = holdGeneration
     // A newer move of the same row replaces its older hold; other rows keep theirs.
-    holds.removeAll { $0.value.sessionId == value.sessionId }
-    holds.append((state.key + HomeScope.stored.rawValue, generation, value))
+    let key = state.key + HomeScope.stored.rawValue
+    holds.removeAll { $0.key != key || $0.value.sessionId == value.sessionId }
+    for index in holds.indices {
+      value.concurrentMoves.insert(holds[index].value.sessionId)
+      holds[index].value.concurrentMoves.insert(value.sessionId)
+    }
+    holds.append((key, generation, value))
     render()
     Task { [weak self] in
       guard let self else { return }
@@ -314,7 +323,7 @@ final class InboxController: UIViewController {
     if requested?.key != key || requested?.catalog != catalog { requestSearch(term, key: key, state: state, catalog: catalog) }
     let current = search.flatMap { $0.key == key && $0.catalog == catalog ? $0 : nil }
     list.setPlaceholder(String(localized: String.LocalizationValue(current == nil ? "search.placeholder.loading" : "search.placeholder.noMatch"), bundle: .lody))
-    list.setSections(InboxSections.search(catalog, hits: current?.hits ?? InboxSearchHits(), query: term))
+    setSections(InboxSections.search(catalog, hits: current?.hits ?? InboxSearchHits(), query: term), for: state)
   }
 
   private func requestSearch(_ term: String, key: String, state: SessionListState, catalog: SessionCatalog) {

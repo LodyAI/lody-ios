@@ -84,7 +84,7 @@ final class StatusViewActions {
       // A pinned conversation leaves the tiers; an unpinned child carried under a pinned opener keeps
       // its own status, which the layout does not show, so it gets every status action.
       guard !isPinned(row) else { return [] }
-      return [laterMenu(row, from: controller, offersFocus: true), settle]
+      return [laterMenu(row, from: controller), settle, focusAction(id, from: controller)]
     }
   }
 
@@ -97,7 +97,7 @@ final class StatusViewActions {
 
   /// Presets with their resolved times (cached from the runtime), a custom time, and Move to
   /// Focus while snoozed. A preset is resolved again when picked, so its instant is current.
-  private func laterMenu(_ row: StatusViewRow, from controller: UIViewController, offersFocus: Bool = false) -> UIMenu {
+  private func laterMenu(_ row: StatusViewRow, from controller: UIViewController) -> UIMenu {
     let workspaceId = source.state.workspaceId
     let id = row.id
     let resolved = UIDeferredMenuElement.uncached { [weak self, weak controller] complete in
@@ -125,7 +125,7 @@ final class StatusViewActions {
       guard let controller else { return }
       self?.presentLater(id, from: controller)
     })
-    if row.tier == .later || offersFocus { children.append(focusAction(id, from: controller)) }
+    if row.tier == .later { children.append(focusAction(id, from: controller)) }
     return UIMenu(title: text("home.status.later"), image: UIImage(systemName: "clock"), children: children)
   }
 
@@ -299,8 +299,9 @@ final class StatusViewActions {
   /// Runs `command` in the current Home scope; a failure warns once. Returns the rows the runtime
   /// wrote (0: the planner refused it or nothing changed), or nil when the write failed.
   func perform(_ command: StatusViewCommand) async -> Int? {
-    let workspaceId = source.state.workspaceId
-    guard !workspaceId.isEmpty else { return nil }
+    let state = source.state
+    let workspaceId = state.workspaceId
+    guard !workspaceId.isEmpty, !Self.readOnly(state) else { return nil }
     do {
       return try await source.statusCommand(workspaceId, command, HomeScope.stored)
     } catch {

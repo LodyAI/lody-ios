@@ -80,7 +80,12 @@ enum InboxSections {
       // Time and project rows keep their native actions, but never offer management the layout withholds.
       sections = sections.map { section in
         var section = section
-        section.rows = section.rows.map { row in index[row.id].map { restrict(row, $0) } ?? row }
+        section.rows = section.rows.map { row in
+          guard let source = index[row.id] else { return row }
+          var row = restrict(row, source)
+          row.menuActions.removeAll { $0.id == "pin" }
+          return row
+        }
         return section
       }
     }
@@ -238,10 +243,27 @@ enum InboxSections {
   static func restrict(_ row: LodyListRow, _ source: StatusViewRow) -> LodyListRow {
     var row = row
     row.leadingActions = source.canPrefer ? [SessionRows.pin(row.pinned)] : []
-    guard !source.canManage else { return row }
-    let managed: Set = ["archive", "rename", "delete", statusActions.settle, statusActions.later, statusActions.focus]
-    row.actions.removeAll { managed.contains($0.id) }
-    row.menuActions.removeAll { managed.contains($0.id) }
+    return restrict(row, canManage: source.canManage, canPrefer: source.canPrefer)
+  }
+
+  static func readOnly(_ sections: [LodyListSection]) -> [LodyListSection] {
+    sections.map { section in
+      var section = section
+      section.headerMenu = []
+      section.rows = section.rows.map { restrict($0, canManage: false, canPrefer: false) }
+      return section
+    }
+  }
+
+  private static func restrict(_ row: LodyListRow, canManage: Bool, canPrefer: Bool) -> LodyListRow {
+    var row = row
+    let managed = ["archive", "rename", "delete", statusActions.settle, statusActions.later, statusActions.focus]
+    func permits(_ action: LodyListAction) -> Bool {
+      action.id == "pin" ? canPrefer : canManage || !managed.contains(action.id)
+    }
+    row.leadingActions = row.leadingActions.filter(permits)
+    row.actions = row.actions.filter(permits)
+    row.menuActions = row.menuActions.filter(permits)
     return row
   }
 

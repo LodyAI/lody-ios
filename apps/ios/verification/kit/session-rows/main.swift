@@ -605,6 +605,17 @@ let secondMove = StatusViewHold(.move(sessionId: "settled-a", to: .pinned("empty
 let both = StatusViewHold.apply([firstMove, secondMove], to: statusLayout)
 precondition(both.focus.first?.id == "later-a" && both.pinned[2].rows.map(\.id) == ["settled-a"] && both.settled.isEmpty)
 
+// A read-back for a different move can change the next row without moving this row.
+let earlier = StatusViewHold(.move(sessionId: "focus-new", to: .pinned("empty"), beforeId: nil), base: statusLayout)!
+var later = StatusViewHold(.move(sessionId: "focus-old", to: .focus, beforeId: nil), base: statusLayout)!
+later.acknowledged = true
+later.concurrentMoves = [earlier.sessionId]
+let partial = earlier.apply(to: statusLayout)
+precondition(earlier.released(by: partial))
+precondition(!later.released(by: partial), "Another move's read-back must not release this row")
+let complete = later.apply(to: partial)
+precondition(later.released(by: complete) && complete.focus.last?.id == "focus-old")
+
 // Undo returns each conversation to where it was: a child that was already settled stays settled.
 precondition(StatusViewPlanning.undo([statusLayout.focus[1], statusLayout.settled[0], statusLayout.focus[1]], now: now)
   == [.moveToFocus(sessionId: "focus-new", includeOpened: false), .settle(sessionId: "settled-a", includeOpened: false)])
@@ -704,6 +715,12 @@ let timeReadOnly = InboxSections.home(statusCatalog, grouping: .time, layout: re
 precondition(timeReadOnly.filter { !$0.id.hasPrefix("view:") }.allSatisfy {
   $0.leadingActions.isEmpty && !$0.actions.contains { $0.id == "archive" } && !$0.menuActions.contains { ["rename", "archive", "delete"].contains($0.id) }
 })
+
+let legacyReadOnly = InboxSections.readOnly(InboxSections.home(statusCatalog, grouping: .project, now: now))
+let legacyRows = legacyReadOnly.flatMap(\.rows).filter { $0.id == "focus-old" }
+precondition(legacyRows.count == 1 && legacyRows[0].leadingActions.isEmpty && legacyRows[0].actions.isEmpty
+  && legacyRows[0].menuActions.contains { $0.id == "share" }
+  && !legacyRows[0].menuActions.contains { ["rename", "archive", "delete", "pin"].contains($0.id) })
 
 // The runtime's own fixture catalog decodes and renders in its order.
 let runtimeFixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

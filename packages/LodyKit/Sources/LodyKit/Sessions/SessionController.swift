@@ -440,7 +440,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   }
 
   private func updateMoreMenu(_ session: SessionItem) {
-    let deleting = SessionActions.isDeleting(source.state.workspaceId, sessionId)
+    let state = source.state
+    let canManage = !StatusViewActions.readOnly(state)
+    let deleting = SessionActions.isDeleting(state.workspaceId, sessionId)
     let more = moreButton
     more.accessibilityLabel = String(localized: "common.more", bundle: .lody)
     var changes: [UIMenuElement] = []
@@ -467,22 +469,23 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
         self?.presentTabs(showClosed: true)
       })
     }
-    children += sessionMenuItems(session)
-    more.menu = UIMenu(children: children + [
-      UIAction(title: String(localized: "session.action.share", bundle: .lody), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
-        self?.perform("share")
-      },
-      UIAction(
+    children += sessionMenuItems(session, canManage: canManage)
+    children.append(UIAction(title: String(localized: "session.action.share", bundle: .lody), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+      self?.perform("share")
+    })
+    if canManage {
+      children.append(UIAction(
         title: String(localized: String.LocalizationValue(session.archived ? "session.action.unarchive" : "session.action.archive"), bundle: .lody),
         image: UIImage(systemName: session.archived ? "tray.and.arrow.up" : "archivebox")
-      ) { [weak self] _ in self?.perform("archive") },
-      UIMenu(options: .displayInline, children: [
+      ) { [weak self] _ in self?.perform("archive") })
+      children.append(UIMenu(options: .displayInline, children: [
         UIAction(
           title: String(localized: String.LocalizationValue(deleting ? "session.delete.pending" : "session.action.delete"), bundle: .lody),
           image: UIImage(systemName: "trash"), attributes: deleting ? [.destructive, .disabled] : .destructive
         ) { [weak self] _ in self?.perform("delete") },
-      ]),
-    ])
+      ]))
+    }
+    more.menu = UIMenu(children: children)
     tabsButton.isHidden = directoryTabs.count <= 1
   }
 
@@ -631,7 +634,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   }
 
   func perform(_ action: String) {
-    let scope = source.state.key
+    let state = source.state
+    if action == "archive", StatusViewActions.readOnly(state) { return }
+    let scope = state.key
     let visit = navigationVisit
     let returnToList: @MainActor () -> Void = { [weak self] in
       guard let self, self.source.state.key == scope, self.navigationVisit == visit,
@@ -716,8 +721,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     )
     for receipt in receipts where (sentReadReceipts[receipt.sessionId] ?? -.infinity) < receipt.at {
       sentReadReceipts[receipt.sessionId] = receipt.at
-      if receipt.sessionId != sessionId {
-        // The list's local watermark for the root clears its dot before the receipt syncs.
+      if receipt.sessionId != sessionId || receipt.viewed > (session.lastMessageAt ?? -.infinity) {
+        // A wake-up can be newer than the message watermark markViewed stores for the page.
         SessionSource.markViewed(userId: state.userId, workspaceId: state.workspaceId, sessionId: receipt.sessionId, at: receipt.viewed)
       }
       let workspace = state.workspaceId
