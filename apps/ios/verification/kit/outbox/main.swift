@@ -156,6 +156,78 @@ func record(_ id: String, phase: String = "waiting", sendId: String? = nil, extr
     try await failedSendRecovery()
     try await retryReferences()
     try await reconciledDelivery()
+    try await durableAttachmentStaging()
+  }
+
+  @MainActor static func durableAttachmentStaging() async throws {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let outboxDir = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString)/OutboxAttachments", isDirectory: true)
+    defer {
+      try? FileManager.default.removeItem(at: tempDir)
+      try? FileManager.default.removeItem(at: outboxDir.deletingLastPathComponent())
+    }
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    let sourceFile = tempDir.appendingPathComponent("picked.txt")
+    try Data("attachment-bytes".utf8).write(to: sourceFile)
+
+    let disk = Disk()
+    var persistence = disk.persistence
+    persistence.attachmentsDirectory = outboxDir
+    var admitted = false
+    let blockedStore = OutboxStore(
+      key: "pending-sends:u1:w", generation: 0, persistence: persistence, awaitingConfirmation: "unknown",
+      admit: { if !admitted { throw WorkspaceContentError.blocked } }
+    )
+    let stagedDraft = record("s1", sendId: "turn-stage", extra: [
+      "attachments": .array([.object([
+        "id": .string("att-1"), "uri": .string(sourceFile.absoluteString), "name": .string("picked.txt"), "kind": .string("file"),
+      ])]),
+    ])
+    do { try await blockedStore.put(stagedDraft).value; preconditionFailure("Blocked store must not stage attachments") }
+    catch WorkspaceContentError.blocked { }
+    precondition(!FileManager.default.fileExists(atPath: outboxDir.path), "Blocked workspaces must never write staged attachments")
+
+    admitted = true
+    let store = OutboxStore(
+      key: "pending-sends:u1:w", generation: 0, persistence: persistence, awaitingConfirmation: "unknown",
+      admit: { if !admitted { throw WorkspaceContentError.blocked } }
+    )
+    try await store.put(stagedDraft).value
+    try FileManager.default.removeItem(at: sourceFile)
+    guard case .array(let items)? = store.snapshot.records.first?.send["attachments"],
+          let stagedURI = items.first?.object?["uri"]?.string,
+          let stagedURL = URL(string: stagedURI) else {
+      preconditionFailure("Expected staged attachment URL")
+    }
+    precondition(stagedURI.contains("/OutboxAttachments/"), "Accepted Outbox attachments must stage into OutboxAttachments")
+    let stagedBytes = try Data(contentsOf: stagedURL)
+    precondition(stagedBytes == Data("attachment-bytes".utf8), "Staged bytes must survive temporaryDirectory cleanup")
+
+    let oldContainerJSON = disk.values["pending-sends:u1:w"]!
+      .replacingOccurrences(of: outboxDir.path, with: "/private/var/mobile/Containers/Data/Application/OLD-UUID/Library/Application Support/Lody/OutboxAttachments")
+    let restored = OutboxRecord.restore(oldContainerJSON, awaitingConfirmation: "unknown", attachmentsDirectory: outboxDir)
+    guard case .array(let restoredItems)? = restored.first?.send["attachments"],
+          let rebasedURI = restoredItems.first?.object?["uri"]?.string,
+          let rebasedURL = URL(string: rebasedURI) else {
+      preconditionFailure("Expected rebased attachment URL")
+    }
+    let rebasedBytes = try Data(contentsOf: rebasedURL)
+    precondition(rebasedBytes == Data("attachment-bytes".utf8), "Restore must rebase OutboxAttachments across container UUID changes")
+
+    let checkpointed = store.snapshot.records[0].recordingUploadedAttachment(
+      id: "att-1", block: .object(["type": .string("file"), "fileId": .string("f-1")])
+    )
+    try await store.put(checkpointed).value
+    try await store.put(stagedDraft.with(phase: "failed", reason: "network")).value
+    guard case .array(let failedItems)? = store.snapshot.records.first?.send["attachments"] else {
+      preconditionFailure("Expected failed attachments")
+    }
+    precondition(failedItems.first?.object?["uploadedBlock"]?.object?["fileId"] == .string("f-1"),
+      "Phase transitions for the same sendId must retain checkpointed uploadedBlock receipts")
+
+    try await store.remove("s1").value
+    precondition(!FileManager.default.fileExists(atPath: stagedURL.path), "Removing an Outbox record must clean up its staged files")
+    print("PASS: Outbox stages attachments after plaintext admission, survives tmp cleanup and container rebasing, retains upload checkpoints, and cleans up on removal")
   }
 
   @MainActor static func reconciledDelivery() async throws {

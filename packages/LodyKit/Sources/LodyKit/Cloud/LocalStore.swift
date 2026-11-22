@@ -172,6 +172,7 @@ final class LocalStore: @unchecked Sendable {
       try execute("DELETE FROM cache")
       try execute("DELETE FROM session_prose")
     }
+    try? FileManager.default.removeItem(at: url.deletingLastPathComponent().appendingPathComponent("OutboxAttachments", isDirectory: true))
     MarkdownPlainText.clearCache()
   }
 }

@@ -4,6 +4,7 @@ struct OutboxPersistence: Sendable {
   var generation: @Sendable () -> Int
   var read: @Sendable (String) async -> String?
   var write: @Sendable (_ key: String, _ value: String, _ generation: Int) async throws -> Void
+  var attachmentsDirectory: URL? = nil
 }
 
 enum OutboxError: Error, Equatable {
@@ -38,7 +39,9 @@ final class OutboxStore {
     writes = Task { @MainActor [weak self] in
       let saved = await persistence.read(key)
       guard let self, generation == persistence.generation() else { return }
-      self.durable = OutboxRecord.restore(saved, awaitingConfirmation: awaitingConfirmation)
+      self.durable = OutboxRecord.restore(
+        saved, awaitingConfirmation: awaitingConfirmation, attachmentsDirectory: persistence.attachmentsDirectory
+      )
       let restored = self.durable.filter { !self.touched.contains($0.sessionId) }
       self.publish(restored + self.snapshot.records, ready: true)
     }
@@ -71,10 +74,58 @@ final class OutboxStore {
       await previous.value
       guard let self, self.current else { throw OutboxError.scopeExpired }
       if record != nil { try self.admit() }
-      let next = Self.replace(self.durable, sessionId, record)
+      let previousRecord = self.durable.first { $0.sessionId == sessionId }
+      var resolved = record
+      if var candidate = resolved, let previousRecord, previousRecord.sendId == candidate.sendId,
+         case .array(let durableItems)? = previousRecord.send["attachments"],
+         case .array(let nextItems)? = candidate.send["attachments"],
+         durableItems.count == nextItems.count {
+        var merged = false
+        let combined = zip(durableItems, nextItems).map { oldItem, newItem -> OutboxValue in
+          guard let oldObj = oldItem.object, var newObj = newItem.object,
+                oldObj["id"] == newObj["id"] else { return newItem }
+          var itemChanged = false
+          if newObj["uploadedBlock"] == nil, let block = oldObj["uploadedBlock"] {
+            newObj["uploadedBlock"] = block
+            itemChanged = true
+          }
+          if let dir = persistence.attachmentsDirectory,
+             let oldURI = oldObj["uri"]?.string, oldURI.contains("/OutboxAttachments/"),
+             newObj["uri"]?.string != oldURI,
+             let rebased = OutboxRecord.rebase(previousRecord, in: dir).send["attachments"],
+             case .array(let rebasedItems) = rebased,
+             let match = rebasedItems.first(where: { $0.object?["id"] == oldObj["id"] })?.object?["uri"] {
+            newObj["uri"] = match
+            itemChanged = true
+          }
+          if itemChanged { merged = true }
+          return itemChanged ? .object(newObj) : newItem
+        }
+        if merged {
+          candidate.send["attachments"] = .array(combined)
+          resolved = candidate
+        }
+      }
+      if let candidate = resolved, let dir = persistence.attachmentsDirectory {
+        resolved = OutboxRecord.stage(candidate, storeKey: key, in: dir)
+      }
+      let next = Self.replace(self.durable, sessionId, resolved)
       try await persistence.write(key, OutboxRecord.encode(next), generation)
       guard self.current else { throw OutboxError.scopeExpired }
       self.durable = next
+      if let dir = persistence.attachmentsDirectory, let previousRecord, previousRecord.sendId != resolved?.sendId {
+        OutboxRecord.removeStagedAttachments(storeKey: key, sendId: previousRecord.sendId, in: dir)
+      }
+      if let resolved, resolved != record,
+         let index = self.snapshot.records.firstIndex(where: { $0.sessionId == sessionId && $0.sendId == resolved.sendId }) {
+        var updated = self.snapshot.records[index]
+        if updated.send["attachments"] != resolved.send["attachments"] {
+          updated.send["attachments"] = resolved.send["attachments"]
+          var records = self.snapshot.records
+          records[index] = updated
+          self.snapshot = Snapshot(records: records, ready: self.snapshot.ready)
+        }
+      }
     }
     writes = Task { _ = await write.result }
     return write

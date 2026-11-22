@@ -638,18 +638,21 @@ final class ChatAttachmentSheet: UIViewController, UICollectionViewDataSource, U
         let resources = PHAssetResource.assetResources(for: asset)
         let resource = resources.first { $0.type == .video || $0.type == .fullSizeVideo } ?? resources.first
         guard let resource else { group.leave(); continue }
-        let name = resource.originalFilename
+        let name = ChatAttachment.safeFileName(resource.originalFilename, fallback: "\(UUID().uuidString).mov")
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "-" + name)
         let request = PHAssetResourceRequestOptions()
         request.isNetworkAccessAllowed = true
         PHAssetResourceManager.default().writeData(for: resource, toFile: destination, options: request) { error in
           defer { group.leave() }
-          guard error == nil else { return }
+          guard error == nil else {
+            try? FileManager.default.removeItem(at: destination)
+            return
+          }
           attachments.add(index, ChatAttachment(id: id, name: name, url: destination, isImage: false))
         }
         continue
       }
-      let original = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? "\(UUID().uuidString).jpg"
+      let original = ChatAttachment.safeFileName(PHAssetResource.assetResources(for: asset).first?.originalFilename, fallback: "\(UUID().uuidString).jpg")
       self.images.requestImageDataAndOrientation(for: asset, options: options) { data, dataUTI, _, _ in
         defer { group.leave() }
         // `.current` renders edits (crops, markup) in a new format; name the file after the data.
