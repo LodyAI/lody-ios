@@ -39,18 +39,27 @@ final class StatusViewActions {
 
   // MARK: Menus
 
+  /// Whether the conversation itself is pinned. An opened child carried under a pinned opener renders
+  /// in the Pinned area (`tier == .pinned`) without being pinned.
+  private func isPinned(_ row: StatusViewRow) -> Bool {
+    row.tier == .pinned && source.state.catalog.session(row.id)?.pinned != false
+  }
+
   /// A Home row's status menu: Later ▸, Settle / Move to Focus, Pin, Move to section ▸, Move to top.
-  func menu(_ id: String, from controller: UIViewController) -> [UIMenuElement] {
+  /// `reorders` is false where the row's area is not on screen (time and project groupings list only
+  /// the Pinned area from the layout), so Move to Top is not offered there.
+  func menu(_ id: String, from controller: UIViewController, reorders: Bool = true) -> [UIMenuElement] {
     guard let layout, let row = layout.index[id] else { return [] }
     var items = tierItems(row, from: controller)
     if row.canPrefer {
-      let pinned = row.tier == .pinned
+      let pinned = isPinned(row)
       items.append(UIAction(
         title: text(pinned ? "session.action.unpin" : "session.action.pin"), image: UIImage(systemName: pinned ? "pin.slash" : "pin")
       ) { [weak self] _ in self?.run(.setPinned(sessionId: id, pinned: !pinned)) })
-      items.append(sectionMenu(row, layout: layout, from: controller))
+      // A carried child is placed by its opener; it gets a section once it is pinned itself.
+      if pinned || row.tier != .pinned { items.append(sectionMenu(row, layout: layout, from: controller)) }
     }
-    if let top = StatusViewPlanning.moveToTop(id, in: layout) {
+    if reorders, let top = StatusViewPlanning.moveToTop(id, in: layout) {
       items.append(UIAction(title: text("home.status.moveToTop"), image: UIImage(systemName: "arrow.up.to.line")) { [weak self] _ in
         self?.move(top)
       })
@@ -69,8 +78,13 @@ final class StatusViewActions {
     switch row.tier {
     case .focus: return [laterMenu(row, from: controller), settle]
     case .later: return [laterMenu(row, from: controller), settle]
-    case .settled: return [focusAction(id, from: controller)]
-    case .pinned: return []
+    // Spec: Later is offered on every tier; Settled adds Move to Focus instead of Settle.
+    case .settled: return [laterMenu(row, from: controller), focusAction(id, from: controller)]
+    case .pinned:
+      // A pinned conversation leaves the tiers; an unpinned child carried under a pinned opener keeps
+      // its own status, which the layout does not show, so it gets every status action.
+      guard !isPinned(row) else { return [] }
+      return [laterMenu(row, from: controller, offersFocus: true), settle]
     }
   }
 
@@ -83,7 +97,7 @@ final class StatusViewActions {
 
   /// Presets with their resolved times (cached from the runtime), a custom time, and Move to
   /// Focus while snoozed. A preset is resolved again when picked, so its instant is current.
-  private func laterMenu(_ row: StatusViewRow, from controller: UIViewController) -> UIMenu {
+  private func laterMenu(_ row: StatusViewRow, from controller: UIViewController, offersFocus: Bool = false) -> UIMenu {
     let workspaceId = source.state.workspaceId
     let id = row.id
     let resolved = UIDeferredMenuElement.uncached { [weak self, weak controller] complete in
@@ -111,7 +125,7 @@ final class StatusViewActions {
       guard let controller else { return }
       self?.presentLater(id, from: controller)
     })
-    if row.tier == .later { children.append(focusAction(id, from: controller)) }
+    if row.tier == .later || offersFocus { children.append(focusAction(id, from: controller)) }
     return UIMenu(title: text("home.status.later"), image: UIImage(systemName: "clock"), children: children)
   }
 
@@ -155,16 +169,17 @@ final class StatusViewActions {
     case InboxSections.statusActions.focus: moveToFocus(id, from: controller)
     case "pin":
       guard let row = row(id) else { return false }
-      if row.canPrefer { run(.setPinned(sessionId: id, pinned: row.tier != .pinned)) }
+      if row.canPrefer { run(.setPinned(sessionId: id, pinned: !isPinned(row))) }
     default: return false
     }
     return true
   }
 
   func settle(_ id: String, from controller: UIViewController) {
-    guard let previous = row(id) else { return }
+    guard row(id) != nil else { return }
     askOpened(id, action: "settle", from: controller) { [weak self] opened in
-      self?.confirming(.settle(sessionId: id, includeOpened: opened), previous: previous, opened: opened, message: self?.text("home.status.toast.settled") ?? "")
+      guard let self else { return }
+      self.confirming(.settle(sessionId: id, includeOpened: opened), previous: self.snapshot(id, opened: opened), message: self.text("home.status.toast.settled"))
     }
   }
 
@@ -175,7 +190,7 @@ final class StatusViewActions {
   }
 
   func snooze(_ id: String, until: Double, from controller: UIViewController) {
-    guard let previous = row(id) else { return }
+    guard row(id) != nil else { return }
     guard until > Self.now else {
       LodyToastOverlay.shared.show(message: text("home.status.later.past"), kind: .error)
       return
@@ -183,7 +198,7 @@ final class StatusViewActions {
     askOpened(id, action: "snooze", from: controller) { [weak self] opened in
       guard let self else { return }
       let message = String.localizedStringWithFormat(self.text("home.status.toast.snoozed"), Self.resolved(until))
-      self.confirming(.snooze(sessionId: id, until: until, includeOpened: opened), previous: previous, opened: opened, message: message)
+      self.confirming(.snooze(sessionId: id, until: until, includeOpened: opened), previous: self.snapshot(id, opened: opened), message: message)
     }
   }
 
@@ -296,24 +311,37 @@ final class StatusViewActions {
     }
   }
 
-  /// Settle and Later confirm with an Undo notice that puts the conversation back where it was.
-  private func confirming(_ command: StatusViewCommand, previous: StatusViewRow, opened: Bool, message: String) {
+  /// The rows a Settle or Later on `id` changes, as rendered before it: the row, then (when they
+  /// follow) its active opened sub-conversations, so Undo restores each one's own prior tier.
+  private func snapshot(_ id: String, opened: Bool) -> [StatusViewRow] {
+    guard let root = row(id) else { return [] }
+    guard opened else { return [root] }
+    return [root] + openedSessions(id).compactMap { row($0.id) }
+  }
+
+  /// Settle and Later confirm with an Undo notice that puts every changed conversation back where it was.
+  private func confirming(_ command: StatusViewCommand, previous: [StatusViewRow], message: String) {
     Task {
       // Nothing written (already settled, or refused) has nothing to undo.
       guard (await perform(command) ?? 0) > 0 else { return }
       LodyToastOverlay.shared.show(message: message, kind: .neutral, actionTitle: text("home.status.toast.undo")) { [weak self] in
-        self?.run(StatusViewPlanning.undo(previous, includeOpened: opened, now: Self.now))
+        for undo in StatusViewPlanning.undo(previous, now: Self.now) { self?.run(undo) }
       }
+    }
+  }
+
+  /// Active (not archived) conversations opened from `id`, Tabs excluded.
+  private func openedSessions(_ id: String) -> [SessionItem] {
+    source.state.catalog.sessions.filter { session in
+      !session.archived && !SessionRows.isTab(session) && session.id != id
+        && (session.openedBySessionId == id || session.openedByRootSessionId == id)
     }
   }
 
   /// Desktop's "apply to opened sub-conversations too?" question, asked only when the conversation
   /// has active opened sub-conversations. `done` receives whether they follow.
   private func askOpened(_ id: String, action: String, from controller: UIViewController, done: @escaping (Bool) -> Void) {
-    let opened = source.state.catalog.sessions.filter { session in
-      !session.archived && !SessionRows.isTab(session) && session.id != id
-        && (session.openedBySessionId == id || session.openedByRootSessionId == id)
-    }
+    let opened = openedSessions(id)
     guard !opened.isEmpty else { return done(false) }
     let working = opened.filter { SessionState($0) == .live }.count
     let key = "home.status.opened." + action
@@ -391,6 +419,19 @@ private struct StatusLaterSheet: View {
   ]
 
   var body: some View {
+    // The medium detent leaves too little height for every control at large text sizes or on small
+    // phones; the sheet scrolls instead of cutting off the custom time and its confirm button.
+    ScrollView {
+      content
+        .padding(.horizontal, LodyLayout.screenPaddingX)
+        .padding(.top, LodySpacing.xl)
+        .padding(.bottom, LodySpacing.lg)
+    }
+    // Actions use the app's Ink accent, not the system blue.
+    .tint(LodyColor.accentSolid)
+  }
+
+  private var content: some View {
     VStack(alignment: .leading, spacing: LodySpacing.md) {
       HStack {
         Text(String(localized: "home.status.later", bundle: .lody)).lodyTextStyle(.headline).foregroundStyle(LodyColor.textPrimary)
@@ -441,9 +482,6 @@ private struct StatusLaterSheet: View {
       }
       .buttonStyle(.borderedProminent)
       .accessibilityIdentifier("later-custom-confirm")
-      Spacer(minLength: 0)
     }
-    .padding(.horizontal, LodyLayout.screenPaddingX)
-    .padding(.top, LodySpacing.xl)
   }
 }

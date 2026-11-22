@@ -11,7 +11,8 @@ final class InboxController: UIViewController {
   /// Settled shows every conversation; not persisted, so it opens folded.
   private var settledExpanded = false
   /// A dropped row's order, held until the catalog reads the move back.
-  private var hold: (key: String, generation: Int, value: StatusViewHold)?
+  /// Dropped orders, oldest first, each held until the catalog reads its move back.
+  private var holds: [(key: String, generation: Int, value: StatusViewHold)] = []
   private var holdGeneration = 0
   /// The layout the list shows (hold applied); drag, drop and accessibility moves resolve against it.
   private var shownLayout: StatusViewLayout?
@@ -194,39 +195,47 @@ final class InboxController: UIViewController {
 
   /// The runtime layout for the current scope, with a held drop applied until it reads back.
   private func statusLayout(_ state: SessionListState) -> StatusViewLayout? {
-    if let nowMs = state.catalog.statusView?.nowMs {
-      StatusViewActions.clock.observe(serverNow: nowMs, deviceNow: LodyRelativeTime.now())
+    if let view = state.catalog.statusView {
+      // `nowMs` belongs with the instant the catalog arrived, not with this render.
+      StatusViewActions.clock.observe(serverNow: view.nowMs, deviceNow: view.receivedAt ?? LodyRelativeTime.now())
     }
     guard let published = state.catalog.statusView?.layout(team: HomeScope.stored == .team, readOnly: StatusViewActions.readOnly(state)) else {
-      hold = nil
+      holds = []
       return nil
     }
-    guard let current = hold else { return published }
-    if current.key != state.key + HomeScope.stored.rawValue || current.value.released(by: published) {
-      hold = nil
-      return published
-    }
-    return current.value.apply(to: published)
+    let key = state.key + HomeScope.stored.rawValue
+    holds.removeAll { $0.key != key || $0.value.released(by: published) }
+    return StatusViewHold.apply(holds.map(\.value), to: published)
+  }
+
+  /// Outside the Status grouping only the Pinned area is on screen, so only its rows reorder there.
+  private func movable(_ id: String) -> Bool {
+    guard HomeGrouping.stored != .status else { return true }
+    guard let area = shownLayout?.root(of: id)?.area, case .pinned = area else { return false }
+    return true
   }
 
   private lazy var statusHooks = ChatListStatusHooks(
     menu: { [weak self] id in
       guard let self else { return [] }
-      return self.status.menu(id, from: self)
+      return self.status.menu(id, from: self, reorders: self.movable(id))
     },
     canDrag: { [weak self] id in
       guard let row = self?.shownLayout?.index[id] else { return false }
       return row.tier == .pinned ? row.canPrefer : row.canManage || row.canPrefer
     },
     drop: { [weak self] id, sectionId, beforeId in
-      guard let row = self?.shownLayout?.index[id], let area = StatusViewArea(sectionId: sectionId) else { return nil }
-      return StatusViewPlanning.drop(row, into: area, beforeId: beforeId)
+      guard let layout = self?.shownLayout, let row = layout.index[id], let area = StatusViewArea(sectionId: sectionId) else { return nil }
+      let before = StatusViewPlanning.knownBefore(beforeId, moving: id, in: area, of: layout)
+      return StatusViewPlanning.drop(row, into: area, beforeId: before)
     },
     moveDirections: { [weak self] in
-      self?.shownLayout.map { StatusViewPlanning.moveDirections(in: $0) } ?? [:]
+      guard let self, let layout = self.shownLayout else { return [:] }
+      return StatusViewPlanning.moveDirections(in: layout).filter { self.movable($0.key) }
     },
     step: { [weak self] id, up in
-      self?.shownLayout.flatMap { StatusViewPlanning.step(id, up: up, in: $0) }
+      guard let self, self.movable(id) else { return nil }
+      return self.shownLayout.flatMap { StatusViewPlanning.step(id, up: up, in: $0) }
     },
     perform: { [weak self] command in self?.runMove(command) }
   )
@@ -248,14 +257,23 @@ final class InboxController: UIViewController {
     }
     holdGeneration += 1
     let generation = holdGeneration
-    hold = (state.key + HomeScope.stored.rawValue, generation, value)
+    // A newer move of the same row replaces its older hold; other rows keep theirs.
+    holds.removeAll { $0.value.sessionId == value.sessionId }
+    holds.append((state.key + HomeScope.stored.rawValue, generation, value))
     render()
     Task { [weak self] in
       guard let self else { return }
       let writes = await self.status.perform(command)
-      guard self.hold?.generation == generation else { return }
+      guard let index = self.holds.firstIndex(where: { $0.generation == generation }) else { return }
       // 0 writes: the planner refused the move or it changed nothing, so no read-back will come.
-      if let writes, writes > 0 { self.hold?.value.acknowledged = true } else { self.hold?.value.failed = true }
+      if let writes, writes > 0 { self.holds[index].value.acknowledged = true } else { self.holds[index].value.failed = true }
+      self.render()
+      guard (writes ?? 0) > 0 else { return }
+      // An accepted write that never moves the published row (another device won the race) must not
+      // pin the local order forever.
+      try? await Task.sleep(for: .seconds(5))
+      guard let late = self.holds.firstIndex(where: { $0.generation == generation }) else { return }
+      self.holds[late].value.failed = true
       self.render()
     }
   }

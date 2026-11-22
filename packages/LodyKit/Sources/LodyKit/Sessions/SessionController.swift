@@ -79,6 +79,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   private var memberTask: Task<Void, Never>?
   var copyService = SessionCopyService.live
   var pendingOwner: (sessionId: String, userId: String)?
+  /// Read receipts already sent from this page, by session, so each render does not resend them.
+  private var sentReadReceipts: [String: Double] = [:]
 
   init(sessionId: String, findQuery: String = "", choice: ModelChoice? = nil, source: SessionSource = .live,
        feed: SessionFeedService = .live, environment: SessionSendEnvironment = .live, permission: PermissionService = .live,
@@ -156,7 +158,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       if let action = body["action"] as? String { self?.contextAction(action) }
     }
     wireMentionEvents()
-    observers = (source.changes + [UIApplication.didBecomeActiveNotification, .lodyPreferencesDidChange]).map { name in
+    observers = (source.changes + [UIApplication.didBecomeActiveNotification, .lodyPreferencesDidChange, .lodyWorkspaceRoleDidChange]).map { name in
       NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
         let activated = note.name == UIApplication.didBecomeActiveNotification
         let viewsChanged = note.name == .lodySessionViewsDidChange
@@ -694,11 +696,39 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     if persistsDraft {
       SessionTabSelection().remember(session, all: state.catalog.sessions, user: state.userId, workspace: state.workspaceId)
     }
+    sendReadReceipts(state, session)
     guard let message = session.lastMessageAt, message.isFinite, message > (tabViews[sessionId] ?? -.infinity) else { return }
     tabViews[sessionId] = message
     SessionSource.markViewed(userId: state.userId, workspaceId: state.workspaceId, sessionId: sessionId, at: message)
     if let panel = ChatTabsOverlay.shown(in: (parent ?? self).view) {
       panel.state.tabs = tabItems(directoryTabs)
+    }
+  }
+
+  /// Seeing the conversation marks it read for every device (`lastReadAt`), including a woken
+  /// snooze on its root conversation, which only a receipt past the wake-up time clears
+  /// (`StatusViewRead`). Each receipt is sent once per value; a failed one is retried on a later visit.
+  private func sendReadReceipts(_ state: SessionListState, _ session: SessionItem) {
+    let rootId = DirectoryTabs.root(session, all: state.catalog.sessions)
+    guard let root = state.catalog.session(rootId) else { return }
+    let receipts = StatusViewRead.receipts(
+      page: session, root: root, rootRow: statusActions.row(rootId), now: StatusViewActions.now
+    )
+    for receipt in receipts where (sentReadReceipts[receipt.sessionId] ?? -.infinity) < receipt.at {
+      sentReadReceipts[receipt.sessionId] = receipt.at
+      if receipt.sessionId != sessionId {
+        // The list's local watermark for the root clears its dot before the receipt syncs.
+        SessionSource.markViewed(userId: state.userId, workspaceId: state.workspaceId, sessionId: receipt.sessionId, at: receipt.viewed)
+      }
+      let workspace = state.workspaceId
+      Task { [weak self, source] in
+        do {
+          try await source.write(workspace, receipt.sessionId, .read(receipt.at))
+        } catch {
+          guard let self, self.sentReadReceipts[receipt.sessionId] == receipt.at else { return }
+          self.sentReadReceipts[receipt.sessionId] = nil
+        }
+      }
     }
   }
 
