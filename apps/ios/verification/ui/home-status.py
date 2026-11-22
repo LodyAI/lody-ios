@@ -47,8 +47,8 @@ for key, command in [('home.status.later', 'snooze'), ('home.status.settle', 'se
             return None
         return next((item for item in items if item.get('AXLabel') == undo and item.get('type') == 'Button'), None)
 
-    button = ui.wait(undo_button, 'The opener should leave Focus and show Undo')
-    ui.axe('tap', *center(button))
+    ui.wait(undo_button, 'The opener should leave Focus and show Undo')
+    ui.axe('tap', '--label', undo, '--tap-style', 'simulator')
     ui.element('focus-a')
     ui.axe('tap', *center(ui.element('label:later')))
     assert ui.element('later-child')['AXValue'] == child_return, 'Undo did not restore the child’s original Later time'
