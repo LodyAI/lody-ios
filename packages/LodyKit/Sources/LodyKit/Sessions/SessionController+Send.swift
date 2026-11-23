@@ -238,7 +238,11 @@ extension SessionController {
       "placeholder": placeholder(session, locked: locked),
     ]
     let busy = control.running || sender?.awaitingReply == true || sender?.sending == true || OutboxDispatcher.busy.contains(session.status)
-    composer["actionBar"] = actionBarState(session, busy: busy)
+    var bar = actionBarState(session, busy: busy)
+    if let progress = feed.historySyncProgress {
+      bar["historySyncProgress"] = ["received": progress.received, "total": progress.total]
+    }
+    composer["actionBar"] = bar
     composer["usage"] = sessionUsage(session, feed: feed)
     adjustComposer(&composer)
     apply("composer", Self.json(composer), chat.setComposerState)

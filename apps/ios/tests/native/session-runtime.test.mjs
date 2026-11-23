@@ -492,6 +492,136 @@ test(
   },
 );
 
+test(
+  'Roost sends exact catch-up counts separately from the transcript',
+  { timeout: 8000 },
+  async () => {
+    const next = Promise.withResolvers();
+    const lastPage = Promise.withResolvers();
+    const finishPage = Promise.withResolvers();
+    const cleared = Promise.withResolvers();
+    const installed = Promise.withResolvers();
+    const counts = [];
+    const turns = Array.from({ length: 1241 }, (_, index) => ({
+      id: `turn-${index}`,
+      role: 'assistant',
+      timestamp: '2026-01-01T00:00:00Z',
+      items: [{ type: 'text', text: `Record ${index}` }],
+    }));
+    const reply = (revision, count, result, pageTurns) => ({
+      type: 'session/history-read_response',
+      sessionId: 's1',
+      success: true,
+      historyRevision: revision,
+      historyCount: count,
+      result,
+      ...(pageTurns ? { pageTurns } : {}),
+    });
+    const plan = reply(2, turns.length, {
+      state: 'ready',
+      checkpoint: 'c2',
+      ids: [],
+      from: 1,
+    });
+    let sentLastPage = false;
+    const fixture = await openTestSession({
+      target: { backend: 'roost', machineId: 'm1' },
+      onEvent(event) {
+        if (event.type === 'sessionHistoryProgress') {
+          assert.equal(event.sessionId, 's1');
+          assert.equal(event.session, undefined);
+          if (event.progress || counts.length)
+            counts.push(event.progress ?? null);
+          if (!event.progress && counts.length) cleared.resolve();
+        }
+        if (
+          event.type === 'session' &&
+          event.synced &&
+          JSON.parse(event.session).entries.some(({ id }) => id === 'turn-1240')
+        )
+          installed.resolve();
+      },
+      onSubscription(request, runtime, signal) {
+        return historyPublications(
+          request,
+          runtime,
+          signal,
+          () => next.promise,
+        );
+      },
+      async onRpc(request, runtime) {
+        const { query } = await runtime.openPayload(request.params);
+        let response;
+        if (query.kind === 'readChanges') {
+          response =
+            query.checkpoint === 'c1'
+              ? plan
+              : reply(2, turns.length, {
+                  state: 'ready',
+                  checkpoint: 'c2',
+                  ids: [],
+                });
+        } else if (query.kind === 'readRange') {
+          assert.equal(query.atCheckpoint, 'c2');
+          if (query.to === turns.length) {
+            lastPage.resolve();
+            await finishPage.promise;
+            sentLastPage = true;
+          }
+          response = reply(
+            2,
+            turns.length,
+            turns
+              .slice(query.from, query.to)
+              .map((turn) => ({ state: 'ready', turn })),
+          );
+        } else if (query.kind === 'readLatestPage') {
+          const total = sentLastPage ? turns.length : 1;
+          const start = Math.max(0, total - 40);
+          const page = turns.slice(start, total);
+          response = reply(
+            sentLastPage ? 2 : 1,
+            total,
+            {
+              checkpoint: sentLastPage ? 'c2' : 'c1',
+              startPosition: start,
+              totalCount: total,
+              rows: page.map(({ id }, offset) => ({
+                position: start + offset,
+                state: 'ready',
+                turnId: id,
+              })),
+              hasMoreOlder: start > 0,
+              cursor: start > 0 ? String(start) : null,
+            },
+            page,
+          );
+        } else {
+          throw new Error(`Unexpected ${query.kind}`);
+        }
+        return { result: await runtime.sealPayload('s1', response) };
+      },
+    });
+    try {
+      next.resolve(plan);
+      await lastPage.promise;
+      assert.deepEqual(counts.at(-1), { received: 1000, total: 1240 });
+      finishPage.resolve();
+      await Promise.all([cleared.promise, installed.promise]);
+      assert.deepEqual(counts, [
+        { received: 0, total: 1240 },
+        { received: 500, total: 1240 },
+        { received: 1000, total: 1240 },
+        { received: 1240, total: 1240 },
+        null,
+      ]);
+    } finally {
+      finishPage.resolve();
+      fixture.close();
+    }
+  },
+);
+
 test('paged Roost reads share their scoped proof and renew it once on owner denial', async () => {
   const proofs = [];
   const received = [];

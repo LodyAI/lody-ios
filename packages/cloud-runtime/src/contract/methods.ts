@@ -71,6 +71,7 @@ import {
 import {
   SessionCacheEvent,
   SessionEvent,
+  SessionHistoryProgressEvent,
   SessionSubscriptionsEvent,
   SessionTraceEvent,
 } from './session-events.ts';
@@ -451,6 +452,7 @@ export const runtimeEvents = {
   sessionSubscriptions: SessionSubscriptionsEvent,
   session: SessionEvent,
   sessionCache: SessionCacheEvent,
+  sessionHistoryProgress: SessionHistoryProgressEvent,
   sessionTrace: SessionTraceEvent,
   diagnostic: DiagnosticEvent,
 } satisfies Record<string, z.ZodType>;

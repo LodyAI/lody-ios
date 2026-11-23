@@ -400,6 +400,7 @@ export function resumeAcceptedInputs() {
 export function resumeSessions() {
   wakeSessionReads();
   for (const state of sessions.values()) state.roostReader?.wake();
+  if (active) emitHistoryProgress(active);
 }
 export async function stopAcceptedInputs() {
   const owner = acceptedInputs;
@@ -422,6 +423,22 @@ const targetIsCurrent = (state: SessionState) =>
   (state.target?.backend !== 'roost' ||
     !state.target.isCurrent ||
     state.target.isCurrent());
+function emitHistoryProgress(state: SessionState) {
+  if (
+    !state.roostReader ||
+    active !== state ||
+    state.controller.signal.aborted ||
+    !targetIsCurrent(state)
+  )
+    return;
+  const progress =
+    state.roostReader.sessionData.historySyncProgress.getSnapshot();
+  state.emit({
+    type: 'sessionHistoryProgress',
+    sessionId: state.id,
+    ...(progress ? { progress } : {}),
+  });
+}
 const sessionControlsReady = (state: SessionState) =>
   !state.controller.signal.aborted &&
   state.status !== 'offline' &&
@@ -1202,6 +1219,7 @@ export async function openSession(
       active = existing;
       sessions.delete(id);
       sessions.set(id, existing);
+      emitHistoryProgress(existing);
     }
     trimSessions();
     flush(existing);
@@ -1407,6 +1425,13 @@ export async function openSession(
           },
         });
         state.roostReader = reader;
+        const stopProgress = reader.sessionData.historySyncProgress.subscribe(
+          () => emitHistoryProgress(state),
+        );
+        controller.signal.addEventListener('abort', stopProgress, {
+          once: true,
+        });
+        emitHistoryProgress(state);
         let window = await retrySessionRead(
           controller.signal,
           () => reader.latest(),

@@ -109,6 +109,10 @@ export function createRemoteRoostSessionDataFactory(options: {
     payload: Record<string, unknown>;
   }) => Promise<OwnerResponse>;
 }): (args: { sessionId: string }) => {
+  historySyncProgress: {
+    getSnapshot: () => { received: number; total: number } | null;
+    subscribe: (listener: () => void) => () => void;
+  };
   history: {
     count(): Promise<number>;
     observe: (listener: (change: unknown) => void) => {

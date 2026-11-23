@@ -32,6 +32,18 @@ export const SessionCacheEvent = z
   })
   .meta({ id: 'SessionCacheEvent' });
 
+export const SessionHistoryProgress = z
+  .object({ received: z.int().nonnegative(), total: z.int().positive() })
+  .refine(({ received, total }) => received <= total)
+  .meta({ id: 'SessionHistoryProgress' });
+
+export const SessionHistoryProgressEvent = z
+  .object({
+    sessionId: z.string().min(1),
+    progress: SessionHistoryProgress.optional(),
+  })
+  .meta({ id: 'SessionHistoryProgressEvent' });
+
 export const SessionSubscriptionsEvent = z
   .object({
     ids: z.array(z.string().min(1)),
@@ -56,6 +68,9 @@ export type SessionTrace = z.input<typeof SessionTraceEvent>;
 export type SessionRuntimeEvent =
   | ({ type: 'session' } & z.input<typeof SessionEvent>)
   | ({ type: 'sessionCache' } & z.input<typeof SessionCacheEvent>)
+  | ({ type: 'sessionHistoryProgress' } & z.input<
+      typeof SessionHistoryProgressEvent
+    >)
   | ({ type: 'sessionSubscriptions' } & z.input<
       typeof SessionSubscriptionsEvent
     >);

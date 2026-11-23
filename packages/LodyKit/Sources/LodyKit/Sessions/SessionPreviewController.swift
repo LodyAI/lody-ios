@@ -341,6 +341,14 @@ private final class SessionPreviewFixture {
           receive(SessionRuntimeEvent(generation: 1, state: "failed"))
         } else {
           receive(SessionRuntimeEvent(generation: 1, state: "live", sessionId: Self.sessionId, session: session))
+          if self.bar == "bar-history-reading" || self.bar == "bar-history-applying" {
+            let total = 1_240
+            let received = self.bar == "bar-history-reading" ? 500 : total
+            receive(SessionRuntimeEvent(generation: 1, historySyncProgress: .init(
+              userId: self.state.userId, workspaceId: self.state.workspaceId,
+              event: .init(sessionId: Self.sessionId, progress: .init(received: received, total: total))
+            )))
+          }
         }
         self.record(status)
       }

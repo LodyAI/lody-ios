@@ -5205,6 +5205,28 @@
         }
       }
     },
+    "chat.historyProgress.reading": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": { "state": "translated", "value": "历史 %1$@ / %2$@ 条" }
+        },
+        "en": {
+          "stringUnit": { "state": "translated", "value": "History %1$@ / %2$@" }
+        }
+      }
+    },
+    "chat.historyProgress.applying": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": { "state": "translated", "value": "应用历史 %1$@ / %2$@ 条" }
+        },
+        "en": {
+          "stringUnit": { "state": "translated", "value": "Applying %1$@ / %2$@" }
+        }
+      }
+    },
     "chat.notice.syncStopped": {
       "extractionState": "manual",
       "localizations": {

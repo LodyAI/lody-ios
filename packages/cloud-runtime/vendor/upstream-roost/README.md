@@ -3,8 +3,8 @@
 Shared support files are from public Lody commit
 [`5724451caeaca55035b6a44be065dbea407b8795`](https://github.com/LodyAI/Lody/commit/5724451caeaca55035b6a44be065dbea407b8795).
 The two reader files, `packages/components/src/lib/roost-session-bridge.ts` and
-`packages/components/src/lib/roost-history-cache.ts`, are from public Lody commit
-[`878e55f8c62133482fc906049d1564d312243b0e`](https://github.com/LodyAI/Lody/commit/878e55f8c62133482fc906049d1564d312243b0e).
+`packages/components/src/lib/roost-history-cache.ts`, are from Lody commit
+`1fd5c4c3d200121e58e8fc790cf12769306b62a2`.
 Each file is copied verbatim from its repository-relative path.
 `packages/acp-extension-dsh/src/capabilities.ts` is from its upstream submodule
 commit `b1b0735fd8c38d191c87d6fbd14f7a27c0f0421e`, with its
