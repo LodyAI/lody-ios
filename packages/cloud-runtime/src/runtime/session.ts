@@ -160,20 +160,6 @@ const readLimit: Record<ReadStage, number> = {
   poll: 35_000,
 };
 const stallGrace = 15_000;
-/** Sessions with fresh active Presence; `undefined` until Presence has joined. */
-let activePresenceSessions: ReadonlySet<string> | undefined;
-const sessionPresence = (id: string) => activePresenceSessions?.has(id);
-/** Presence can end work while the transcript stream is quiet. */
-export function updateActiveSessionPresence(
-  ids: ReadonlySet<string> | undefined,
-) {
-  const previous = new Map(
-    [...sessions.keys()].map((id) => [id, sessionPresence(id)]),
-  );
-  activePresenceSessions = ids;
-  for (const state of sessions.values())
-    if (previous.get(state.id) !== sessionPresence(state.id)) flush(state);
-}
 let active: SessionState | undefined;
 // Working sessions use visit order; idle visits never enter the background LRU.
 const sessions = new Map<string, SessionState>();
@@ -893,6 +879,20 @@ export function refreshSessionUsage() {
     const usage = JSON.stringify(readUsage(state.id, modelId));
     if (usage !== state.lastUsage) flush(state);
   }
+}
+/** Sessions with fresh active Presence; `undefined` until Presence has joined. */
+let activePresenceSessions: ReadonlySet<string> | undefined;
+const sessionPresence = (id: string) => activePresenceSessions?.has(id);
+/** Presence can end work while the transcript stream is quiet. */
+export function updateActiveSessionPresence(
+  ids: ReadonlySet<string> | undefined,
+) {
+  const previous = new Map(
+    [...sessions.keys()].map((id) => [id, sessionPresence(id)]),
+  );
+  activePresenceSessions = ids;
+  for (const state of sessions.values())
+    if (previous.get(state.id) !== sessionPresence(state.id)) flush(state);
 }
 function flush(state: SessionState) {
   clearTimeout(state.pending);
