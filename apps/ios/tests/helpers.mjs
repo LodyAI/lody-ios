@@ -49,6 +49,12 @@ export async function loadRuntime(storageSuffix = '') {
   );
 }
 
+/** A sync-progress clock that puts each event a full throttle interval after the last. */
+export function unthrottledProgressClock() {
+  let now = 0;
+  return { now: () => (now += 100), schedule: () => () => {} };
+}
+
 export function frame(bytes) {
   const result = new Uint8Array(bytes.length + 4);
   new DataView(result.buffer).setUint32(0, bytes.length, false);
@@ -118,6 +124,8 @@ export async function openTestSession({
   catchupServer,
   /** Bytes of the workspace settings Flock (`w1:wf:workspace`), e.g. Agent Role rows. */
   settings,
+  /** Replaces the runtime's sync-progress throttle clock. */
+  syncProgressClock,
 } = {}) {
   const previousIndexedDB = globalThis.indexedDB;
   const previousIDBKeyRange = globalThis.IDBKeyRange;
@@ -273,6 +281,7 @@ export async function openTestSession({
     }
   };
   const runtime = await loadRuntime(storageSuffix);
+  if (syncProgressClock) runtime.setSyncProgressClock(syncProgressClock);
   let resolveEmit;
   const events = [];
   const background = [];

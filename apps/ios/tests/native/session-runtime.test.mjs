@@ -9,6 +9,7 @@ import {
   loadRuntime,
   frame,
   historyPublications,
+  unthrottledProgressClock,
 } from '../helpers.mjs';
 
 test('an empty session opens on the next 250 ms routing metadata check', async (t) => {
@@ -527,6 +528,7 @@ test(
     let sentLastPage = false;
     const fixture = await openTestSession({
       target: { backend: 'roost', machineId: 'm1' },
+      syncProgressClock: unthrottledProgressClock(),
       onEvent(event) {
         if (event.type === 'sessionSyncProgress') {
           assert.equal(event.sessionId, 's1');
@@ -633,6 +635,7 @@ test(
   { timeout: 8000 },
   async (t) => {
     const runtime = await loadRuntime();
+    runtime.setSyncProgressClock(unthrottledProgressClock());
     globalThis.__sessionClient = StreamsClient;
     t.after(() => {
       runtime.stopSessions();
@@ -793,6 +796,189 @@ test(
       allowRetirement.resolve();
       allowSnapshot.resolve();
     }
+  },
+);
+
+/** A clock whose time and timers move only when the test advances them. */
+function manualClock() {
+  let now = 0;
+  const timers = new Set();
+  return {
+    clock: {
+      now: () => now,
+      schedule(run, delayMs) {
+        const timer = { at: now + delayMs, run };
+        timers.add(timer);
+        return () => timers.delete(timer);
+      },
+    },
+    advance(ms) {
+      now += ms;
+      for (const timer of [...timers])
+        if (timer.at <= now) {
+          timers.delete(timer);
+          timer.run();
+        }
+    },
+  };
+}
+
+/**
+ * Opens a Loro session whose bootstrap body arrives one chunk per `deliver()`.
+ * `deliver` resolves once the runtime asked for the next chunk, so the chunk's
+ * progress has been observed.
+ */
+async function openChunkedBootstrap(t, resolveTarget, clock) {
+  const runtime = await loadRuntime();
+  runtime.setSyncProgressClock(clock);
+  globalThis.__sessionClient = StreamsClient;
+  t.after(() => {
+    runtime.stopSessions();
+    delete globalThis.__sessionClient;
+  });
+  const author = new LoroDoc();
+  author.getList('history').push({
+    id: 'cached',
+    role: 'user',
+    timestamp: '2026-01-01',
+    items: [{ type: 'text', text: 'cached' }],
+  });
+  author.commit();
+  const body = Buffer.concat([
+    Buffer.from('--lody\r\nContent-Type: application/octet-stream\r\n\r\n'),
+    author.export({ mode: 'snapshot' }),
+    Buffer.from('\r\n--lody--\r\n'),
+  ]);
+  const chunks = [
+    body.subarray(0, 10),
+    body.subarray(10, 20),
+    body.subarray(20, 30),
+    body.subarray(30),
+  ];
+  const requested = Array.from({ length: chunks.length + 1 }, () =>
+    Promise.withResolvers(),
+  );
+  const released = Array.from({ length: chunks.length + 1 }, () =>
+    Promise.withResolvers(),
+  );
+  let index = 0;
+  t.mock.method(globalThis, 'fetch', async (input, { signal }) => {
+    if (!new URL(input).pathname.endsWith('/bootstrap'))
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    const source = new ReadableStream(
+      {
+        async pull(stream) {
+          const current = index++;
+          requested[current].resolve();
+          await released[current].promise;
+          if (current === chunks.length) stream.close();
+          else stream.enqueue(chunks[current]);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return new Response(source, {
+      headers: {
+        'Content-Type': 'multipart/mixed; boundary=lody',
+        'Content-Length': String(body.byteLength),
+        'Stream-Next-Offset': '100',
+        'Stream-Snapshot-Offset': '100',
+        'Stream-Up-To-Date': 'true',
+      },
+    });
+  });
+  const events = [];
+  const cleared = Promise.withResolvers();
+  await runtime.openSession(
+    's1',
+    'w1',
+    async () => ({ token: 'synthetic', gatewayBaseUrl: 'https://x.invalid' }),
+    (event) => {
+      if (event.type !== 'sessionSyncProgress') return;
+      events.push(event.progress ?? null);
+      if (!event.progress && events.length > 1) cleared.resolve();
+    },
+    async () => {},
+    true,
+    resolveTarget,
+  );
+  await requested[0].promise;
+  return {
+    total: body.byteLength,
+    events,
+    cleared: cleared.promise,
+    async deliver(chunk) {
+      released[chunk].resolve();
+      if (chunk < chunks.length) await requested[chunk + 1].promise;
+    },
+  };
+}
+
+test(
+  // Every event rebuilds the native composer, so one per body chunk would flood the main thread.
+  'Loro bootstrap progress reaches the host at most every 100 ms, keeping first, complete and cleared states',
+  { timeout: 8000 },
+  async (t) => {
+    const time = manualClock();
+    const session = await openChunkedBootstrap(
+      t,
+      () => ({ backend: 'loro' }),
+      time.clock,
+    );
+    const { total, events } = session;
+    await session.deliver(0);
+    assert.deepEqual(events, [
+      { kind: 'bootstrap', received: 0 },
+      { kind: 'bootstrap', received: 10, total },
+    ]);
+    time.advance(40);
+    await session.deliver(1);
+    time.advance(40);
+    await session.deliver(2);
+    assert.equal(events.length, 2, 'counts inside the interval wait');
+    time.advance(20);
+    assert.deepEqual(events.at(-1), { kind: 'bootstrap', received: 30, total });
+    await session.deliver(3);
+    await session.deliver(4);
+    await session.cleared;
+    assert.deepEqual(events.slice(2), [
+      { kind: 'bootstrap', received: 30, total },
+      { kind: 'bootstrap', received: total, total },
+      null,
+    ]);
+  },
+);
+
+test(
+  'a Roost-backed session never shows Loro control-document bytes, even before its backend resolves',
+  { timeout: 8000 },
+  async (t) => {
+    const time = manualClock();
+    const session = await openChunkedBootstrap(
+      t,
+      () => ({
+        backend: 'roost',
+        machineId: 'm1',
+        incremental: true,
+        live: true,
+        acceptsInput: true,
+        dispatchesInput: true,
+        getHistoryProof: async () => {
+          throw new Error('unused');
+        },
+        isCurrent: () => true,
+      }),
+      time.clock,
+    );
+    for (const chunk of [0, 1, 2, 3]) {
+      time.advance(200);
+      await session.deliver(chunk);
+    }
+    assert.deepEqual(session.events, []);
   },
 );
 

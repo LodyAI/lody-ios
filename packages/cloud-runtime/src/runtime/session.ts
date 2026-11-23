@@ -108,6 +108,10 @@ type SessionState = {
   historySubscriptionFailure?: string;
   streamReady?: boolean;
   loroSyncProgress?: SessionSyncProgress;
+  /** Whether the pending metadata already names Loro; Roost backends never show Loro bytes. */
+  loroTargetKnown?: () => boolean;
+  syncProgressSent?: { at: number; progress?: SessionSyncProgress };
+  cancelSyncProgress?: () => void;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
   roostMetadata?: Record<string, unknown>[];
@@ -406,7 +410,7 @@ export function resumeAcceptedInputs() {
 export function resumeSessions() {
   wakeSessionReads();
   for (const state of sessions.values()) state.roostReader?.wake();
-  if (active) emitSyncProgress(active);
+  if (active) emitSyncProgress(active, true);
 }
 export async function stopAcceptedInputs() {
   const owner = acceptedInputs;
@@ -424,22 +428,84 @@ const historyList = (state: SessionState) => {
     toJSON: () => turns,
   };
 };
+export type SyncProgressClock = {
+  now: () => number;
+  /** Runs `run` once after `delayMs`; the returned function cancels it. */
+  schedule: (run: () => void, delayMs: number) => () => void;
+};
+const timerClock: SyncProgressClock = {
+  now: () => Date.now(),
+  schedule: (run, delayMs) => {
+    const timer = setTimeout(run, delayMs);
+    return () => clearTimeout(timer);
+  },
+};
+let syncProgressClock = timerClock;
+/** Tests inject a manual clock; no argument restores the timer clock. */
+export function setSyncProgressClock(clock?: SyncProgressClock) {
+  syncProgressClock = clock ?? timerClock;
+}
+/**
+ * Every host event rebuilds native composer state, so intermediate byte or
+ * record counts reach the host at most this often. Transitions (first, kind or
+ * total change, complete, cleared) always go out at once.
+ */
+export const SYNC_PROGRESS_INTERVAL_MS = 100;
 const targetIsCurrent = (state: SessionState) =>
   (state.scopeIsCurrent?.() ?? true) &&
   (state.target?.backend !== 'roost' ||
     !state.target.isCurrent ||
     state.target.isCurrent());
-function emitSyncProgress(state: SessionState) {
+function currentSyncProgress(state: SessionState) {
+  if (state.target?.backend === 'roost')
+    return (
+      state.roostReader?.sessionData.sessionSyncProgress.getSnapshot() ??
+      undefined
+    );
+  return state.target?.backend === 'loro' || state.loroTargetKnown?.()
+    ? state.loroSyncProgress
+    : undefined;
+}
+const sameSyncProgress = (a?: SessionSyncProgress, b?: SessionSyncProgress) =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.kind === b.kind &&
+    a.received === b.received &&
+    a.total === b.total);
+/** `force` re-publishes the current value to a host that may have dropped it. */
+function emitSyncProgress(state: SessionState, force = false) {
   if (
     active !== state ||
     state.controller.signal.aborted ||
     !targetIsCurrent(state)
   )
     return;
-  const progress =
-    state.target?.backend === 'roost'
-      ? state.roostReader?.sessionData.sessionSyncProgress.getSnapshot()
-      : state.loroSyncProgress;
+  const progress = currentSyncProgress(state);
+  const sent = state.syncProgressSent;
+  const now = syncProgressClock.now();
+  const transition =
+    force ||
+    !sent?.progress ||
+    !progress ||
+    progress.kind !== sent.progress.kind ||
+    progress.total !== sent.progress.total ||
+    (progress.total !== undefined && progress.received >= progress.total);
+  if (!transition && now - sent.at < SYNC_PROGRESS_INTERVAL_MS) {
+    state.cancelSyncProgress ??= syncProgressClock.schedule(
+      () => {
+        state.cancelSyncProgress = undefined;
+        emitSyncProgress(state);
+      },
+      sent.at + SYNC_PROGRESS_INTERVAL_MS - now,
+    );
+    return;
+  }
+  state.cancelSyncProgress?.();
+  state.cancelSyncProgress = undefined;
+  // Unforced, a repeat or a clear of nothing shown is not sent.
+  if (!force && sameSyncProgress(sent?.progress, progress)) return;
+  state.syncProgressSent = { at: now, progress };
   state.emit({
     type: 'sessionSyncProgress',
     sessionId: state.id,
@@ -1231,7 +1297,7 @@ export async function openSession(
       active = existing;
       sessions.delete(id);
       sessions.set(id, existing);
-      emitSyncProgress(existing);
+      emitSyncProgress(existing, true);
     }
     trimSessions();
     flush(existing);
@@ -1257,6 +1323,20 @@ export async function openSession(
     emit,
     readFailures: 0,
   };
+  if (!resolveTarget) state.loroTargetKnown = () => true;
+  else {
+    let known: boolean | undefined;
+    state.loroTargetKnown = () => {
+      if (known === undefined)
+        try {
+          const backend = resolveTarget()?.backend;
+          if (backend) known = backend === 'loro';
+        } catch {
+          /* Metadata is not authoritative yet. */
+        }
+      return known === true;
+    };
+  }
   if (activate) active = state;
   sessions.set(id, state);
   trimSessions();
@@ -1269,6 +1349,14 @@ export async function openSession(
   controller.signal.addEventListener('abort', loroProgress.clear, {
     once: true,
   });
+  controller.signal.addEventListener(
+    'abort',
+    () => {
+      state.cancelSyncProgress?.();
+      state.cancelSyncProgress = undefined;
+    },
+    { once: true },
+  );
   const fetchRead = observeLoroBootstrap(
     (input, init) => fetch(input, init),
     loroProgress.beginBootstrap,
@@ -1464,6 +1552,8 @@ export async function openSession(
       if (!target) throw new Error('metadata_not_ready');
       if (sessions.get(id) !== state) return;
       state.target = target;
+      // Loro bytes read before the backend was known were withheld.
+      if (target.backend === 'loro') emitSyncProgress(state);
       if (target.backend === 'roost') {
         const liveHistory = target.live;
         let ownerCheckpoint: string | undefined;

@@ -76,6 +76,10 @@ from the bootstrap response and advances stream offsets after importing pages.
 A bounded head query can supply the target for that incremental read. A retired
 cursor clears the old count before the runtime imports a fresh snapshot. A
 count-free event clears the indicator when the read completes or is abandoned.
+Intermediate counts reach the host at most every 100 ms; the first count, a new
+kind or total, completion and the clear go out at once. Loro counts stay hidden
+until session metadata names the Loro backend, so Roost sessions never show
+their control document's bytes.
 Ready Roost inputs use the same workspace input coordinator as Lody and its
 account/workspace-scoped IndexedDB storage. It persists the exact input before
 handoff, orders inputs by session and checks the owner after an uncertain
