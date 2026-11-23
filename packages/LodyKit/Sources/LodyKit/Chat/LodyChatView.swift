@@ -83,6 +83,11 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   var onTurnInfoPress: ([String: Any]) -> Void = { _ in }
   weak var messageDetailsPage: MessageDetailsController?
   var turnInfoEnabled = false
+  /// Fresh session Presence reports active work; nil until workspace Presence has joined.
+  /// False stops a running reply's work timer, which then reads as unconfirmed.
+  var hasActivePresence: Bool? {
+    didSet { if oldValue != hasActivePresence { scheduleUpdate() } }
+  }
   var onFilePress: ([String: Any]) -> Void = { _ in }
   /// Opens a GitHub PR link in the native PR page; false leaves it to the browser.
   var onPullRequestLink: (ChatPullRequestLink) -> Bool = { _ in false }

@@ -20,6 +20,7 @@ struct SessionEnvelope: Sendable {
   var usageJSON: String?
   var preview: SessionBrowserPreview?
   var transcript = SessionTranscriptFacts()
+  var hasActivePresence: Bool?
 
   static func prepare(_ json: String) -> SessionEnvelope? {
     guard let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return nil }
@@ -29,6 +30,7 @@ struct SessionEnvelope: Sendable {
     )
     envelope.sendReady = object["sendReady"] as? Bool
     envelope.controlReady = object["controlReady"] as? Bool
+    envelope.hasActivePresence = object["hasActivePresence"] as? Bool
     if let preview = object["preview"] as? [String: Any], let label = preview["label"] as? String {
       envelope.preview = SessionBrowserPreview(label: label, active: preview["active"] as? Bool == true)
     }

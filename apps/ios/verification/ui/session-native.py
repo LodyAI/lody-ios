@@ -72,6 +72,32 @@ def check_archive():
     ui.capture('unarchive-stays')
 
 
+def check_work_presence():
+    unconfirmed = catalog.text('chat.work.unconfirmed')
+    working = catalog.text('native.chat.transcript.status.workingFor').split('%', 1)[0].strip()
+
+    def current_duration(items):
+        # Debug links can stack session sheets. The last matching row belongs
+        # to the foreground sheet in the accessibility tree.
+        row = next((i for i in reversed(items) if i.get('AXUniqueId') == 'preview-user:duration'), {})
+        return spoken(row)
+
+    # Fresh active Presence and not-yet-joined Presence both keep the live timer;
+    # only Presence that reports no active work replaces it.
+    for case, expected in (('active-work', working), ('unknown-work', working), ('stale-work', unconfirmed)):
+        ui.open_case(f'session-preview-{case}')
+        wait_probe('live', f'{case} fixture did not deliver the transcript')
+        wait_text('Reply before the final update arrives.')
+        ui.wait(lambda items: expected in current_duration(items), f'{case} did not show {expected}')
+        ui.capture(case)
+
+
+if os.environ.get('LODY_VERIFY_SESSION_WORK_ONLY') == '1':
+    check_work_presence()
+    print('PASS: the work timer follows session Presence and keeps the reply')
+    sys.exit(0)
+
+
 if os.environ.get("LODY_VERIFY_SESSION_ARCHIVE_ONLY") == "1":
     wait_probe("live", "Archive scenario did not start")
     check_archive()
@@ -221,6 +247,8 @@ ui.capture('offline')
 ui.axe('tap', '--id', 'chat-overlay-status', '--post-delay', '.5')
 wait_probe('reconnect', 'Reconnect did not reach the session feed')
 wait_text('Live reply with a needle')
+
+check_work_presence()
 
 ui.open_case('session-preview-find')
 ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-find-field' and 'needle' in (i.get('AXValue') or '') for i in items), 'Find query did not open the find bar')

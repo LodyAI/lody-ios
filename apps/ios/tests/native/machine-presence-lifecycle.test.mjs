@@ -113,3 +113,97 @@ test('presence reconnects a stalled join, expires heartbeats and fences replaced
   room.status('joined');
   assert.equal(events.at(-1).state, 'unknown');
 });
+
+test('session activity is unknown until Presence joins, then lists only fresh active sessions', async (t) => {
+  t.mock.timers.enable({
+    apis: ['setTimeout', 'setInterval', 'Date'],
+    now: 100_000,
+  });
+  const rooms = [];
+  class Store {
+    states = {};
+    getAllStates() {
+      return this.states;
+    }
+    subscribe(listener) {
+      this.listener = listener;
+      return () => {
+        this.listener = undefined;
+      };
+    }
+    destroy() {}
+  }
+  class Room {
+    constructor({ adaptor }) {
+      this.store = adaptor;
+      rooms.push(this);
+    }
+    async join({ onStatusChange }) {
+      this.status = onStatusChange;
+      return { ok: true };
+    }
+    async close() {}
+  }
+  t.mock.module('loro-crdt/base64', {
+    namedExports: { EphemeralStore: Store },
+  });
+  t.mock.module('@loro-dev/streams-crdt/loro', {
+    namedExports: {
+      EphemeralStreamCrdt: Room,
+      EphemeralStoreAdaptor: (store) => store,
+    },
+  });
+  // A fresh module instance resolves this test's mocks.
+  const { watchMachinePresence } =
+    await import('../../../../packages/cloud-runtime/src/runtime/machine-presence.ts?activity');
+  const active = [];
+  const stop = watchMachinePresence(
+    'w',
+    async () => ({
+      token: 'fixture',
+      gatewayBaseUrl: 'https://example.invalid',
+    }),
+    () => {},
+    (ids) => active.push(ids && [...ids].sort()),
+  );
+  t.after(stop);
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.deepEqual(
+    active,
+    [undefined],
+    'before the room joins, no session is reported as idle',
+  );
+  const session = (sessionId, type, updatedAt = Date.now()) => ({
+    kind: 'session',
+    sessionId,
+    machineId: 'a',
+    instanceId: 'one',
+    updatedAt,
+    status: { type },
+  });
+  const room = rooms[0];
+  room.store.states = {
+    running: session('s1', 'running'),
+    permission: session('s2', 'requestPermission'),
+    idle: session('s3', 'idle'),
+    expired: session('s4', 'running', Date.now() - 90_000),
+  };
+  room.status('joined');
+  assert.deepEqual(active.at(-1), ['s1', 's2']);
+  const published = active.length;
+  room.store.states.running = session('s1', 'running');
+  room.store.listener();
+  assert.equal(
+    active.length,
+    published,
+    'a heartbeat that keeps the same sessions active is not republished',
+  );
+  t.mock.timers.tick(90_000);
+  assert.deepEqual(
+    active.at(-1),
+    [],
+    'expired session heartbeats cannot keep work active',
+  );
+  room.status('reconnecting');
+  assert.equal(active.at(-1), undefined);
+});

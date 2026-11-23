@@ -323,6 +323,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       return
     }
     chat.setTabClosed(false)
+    chat.hasActivePresence = state.hasActivePresence
     renderComposer(session, state)
     renderPermission()
     chat.setEmptyText(String(localized: String.LocalizationValue(state.status == "live" ? "chat.empty.prompt" : "chat.empty.loading"), bundle: .lody))
