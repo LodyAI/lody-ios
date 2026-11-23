@@ -77,7 +77,7 @@ test('deleted session metadata cannot authorize a Role send', async () => {
   });
 });
 
-test('session opening waits for metadata and negotiates Roost capabilities with the owner', async () => {
+async function loadLifecycle() {
   const bundle = await build({
     entryPoints: ['packages/cloud-runtime/src/runtime/handlers/lifecycle.ts'],
     bundle: true,
@@ -104,9 +104,15 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
       },
     ],
   });
-  const { registerLifecycle } = await import(
-    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
-  );
+  return (
+    await import(
+      `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
+    )
+  ).registerLifecycle;
+}
+
+test('session opening waits for metadata and negotiates Roost capabilities with the owner', async () => {
+  const registerLifecycle = await loadLifecycle();
   const handlers = new Map();
   const state = {
     workspace: 'w',
@@ -141,10 +147,8 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
     const target = globalThis.__target();
     assert.equal(globalThis.__target.legacyFallbackAllowed(), false);
     assert.equal(target.isCurrent(), true);
-    const { isCurrent, getHistoryProof, cloud, ...capabilities } = target;
+    const { isCurrent, getHistoryProof, ...capabilities } = target;
     assert.equal(typeof getHistoryProof, 'function');
-    assert.equal(cloud.metadata().machineId, 'm');
-    assert.equal(typeof cloud.observe, 'function');
     assert.deepEqual(capabilities, {
       backend: 'roost',
       accountId: 'u',
@@ -182,6 +186,53 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
     flock.commit();
     assert.deepEqual(globalThis.__target(), { backend: 'loro' });
     assert.equal(globalThis.__target.legacyFallbackAllowed(), true);
+  } finally {
+    delete globalThis.__target;
+  }
+});
+
+test('Roost sessions without a published history binding still load from the owner', async () => {
+  // The cloud read grant exists only for a published binding; without one the
+  // grant is refused, so the transcript must keep the owner RPC reader.
+  const registerLifecycle = await loadLifecycle();
+  const handlers = new Map();
+  const flock = new Flock('history-binding');
+  const observed = [];
+  registerLifecycle({
+    state: {
+      workspace: 'w',
+      userId: 'u',
+      unhealthy: new Set(),
+      metaReplica: { flock },
+    },
+    channel: { handle: (name, fn) => handlers.set(name, fn) },
+    publishSubscriptions() {},
+    observeMeta: (wake) => {
+      observed.push(wake);
+      return () => {};
+    },
+  });
+  flock.set(['e', 'session-s'], true);
+  flock.set(['m', 'session-s'], { machineId: 'm', historyBackend: 'roost' });
+  flock.set(['e', 'machine-m'], true);
+  flock.set(['m', 'machine-m'], {
+    protocolCapabilities: { sessionHistory: SESSION_HISTORY_PROTOCOL_VERSION },
+  });
+  flock.commit();
+  await handlers.get('openSession')({ sessionId: 's' });
+  try {
+    const owner = globalThis.__target();
+    assert.equal(owner.backend, 'roost');
+    assert.equal(owner.cloud, undefined);
+
+    flock.set(['m', 'session-s', 'roostCloudGeneration'], 'root');
+    flock.set(['m', 'session-s', 'roostCloudAuthor'], 'A'.repeat(43));
+    flock.commit();
+    const published = globalThis.__target();
+    assert.equal(published.cloud.metadata().roostCloudAuthor, 'A'.repeat(43));
+    const wake = () => {};
+    published.cloud.observe(wake);
+    assert.deepEqual(observed, [wake]);
   } finally {
     delete globalThis.__target;
   }

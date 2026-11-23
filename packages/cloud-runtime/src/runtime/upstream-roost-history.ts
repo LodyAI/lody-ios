@@ -38,6 +38,21 @@ export function createMobileRoostSessionData(
 ) {
   const transport = createRoostHistoryTransport(options);
   const cloud = options.cloud;
+  // The replica waits at its tail with a long-poll that its fetch lifetime
+  // (or a suspended host) aborts. Its one failure reason cannot tell that
+  // from a lost connection, so the first failure after a caught-up report is
+  // a re-poll; the replica retries at once and a repeated failure is surfaced.
+  let caughtUp = false;
+  const onCloudSync = (
+    sync: { checkpoint: string } | { reason: string },
+  ): void => {
+    const repoll =
+      caughtUp &&
+      'reason' in sync &&
+      sync.reason === 'roost_cloud_sync_unavailable';
+    caughtUp = 'checkpoint' in sync;
+    if (!repoll) options.onSubscription?.(sync);
+  };
   return createRemoteRoostSessionDataFactory({
     ...options,
     accountId: options.accountId
@@ -72,7 +87,7 @@ export function createMobileRoostSessionData(
               throw new Error('workspace_changed');
             return parseRoostCloudHistoryGrant(grant);
           },
-          onSyncState: options.onSubscription,
+          onSyncState: onCloudSync,
         });
       },
     }),
@@ -171,6 +186,11 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
     sessionData: data,
     wake() {
       wake?.();
+    },
+    /** Re-reads the latest window even without a history change event. */
+    reload() {
+      generation++;
+      notify?.();
     },
     metadataChanged(metadata: readonly Record<string, unknown>[] | undefined) {
       const seen = changes.splice(0);

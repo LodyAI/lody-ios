@@ -1405,7 +1405,16 @@ export async function openSession(
               retrying(new Error(observation.reason));
             } else {
               ownerCheckpoint = observation.checkpoint;
-              if (!state.historyReady) confirmHistory();
+              if (state.historyReady) return;
+              // A published replica's checkpoint includes its forward offset,
+              // which can advance without a history change event. Reload the
+              // window so readiness confirms against the caught-up checkpoint.
+              if (
+                target.cloud &&
+                ownerCheckpoint !== state.roostWindow?.checkpoint
+              )
+                state.roostReader?.reload();
+              else confirmHistory();
             }
           },
         });
