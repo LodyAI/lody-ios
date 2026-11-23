@@ -7,7 +7,7 @@ import {
   type MessageQuoteSpan,
 } from '../protocol/message-quotes.ts';
 import { LoroDoc, LoroMap, LoroList, LoroText } from 'loro-crdt/base64';
-import { StreamsClient } from '@loro-dev/streams-client';
+import { StreamsClient, type StreamError } from '@loro-dev/streams-client';
 import {
   createLoroSyncProgress,
   observeLoroBootstrap,
@@ -39,7 +39,13 @@ import {
   HistoryEntryWriteSchema,
   parseHistoryWrite,
 } from './upstream-roost.js';
-import { retrySessionRead, wakeSessionReads } from './session-read';
+import {
+  retrySessionRead,
+  TerminalReadError,
+  waitBeforeRead,
+  wakeSessionReads,
+} from './session-read';
+export { setReadRetryTimer } from './session-read';
 import { resolveTurnRole, type TurnRole } from './agent-roles';
 import { record, roleRunConfigApplied } from '../protocol/agent-roles';
 import type {
@@ -858,6 +864,41 @@ function trace(
 ) {
   traceSink({ sessionId: state.id, event, ...fields });
 }
+/** Bytes one session sync window may import, its bootstrap snapshot included. */
+const SESSION_WINDOW_BYTES = 32 * 1024 * 1024;
+/** Catch-up pages one session sync window may read before it is up to date. */
+const SESSION_WINDOW_PAGES = 100;
+/** Expired-cursor bootstraps without a successful read in between before giving up. */
+const MAX_CURSOR_RECOVERIES = 3;
+/** The second recovery waits this long; each later one doubles it. */
+const CURSOR_RECOVERY_DELAY_MS = 1000;
+const decimalOffset = (value: string) =>
+  /^\d{1,20}$/.test(value) ? BigInt(value) : undefined;
+/** Whether Streams offset `next` is after `previous` (zero-padded decimals). */
+function offsetAfter(next: string, previous: string) {
+  const a = decimalOffset(next);
+  const b = decimalOffset(previous);
+  return a !== undefined && b !== undefined && a > b;
+}
+/**
+ * A missing or deleted space or stream and a rejected request fail the same
+ * way on every attempt, so they end the session read. Network, timeout, rate
+ * limit, server and authorization failures (after a grant refresh) retry.
+ */
+function streamReadError(error: StreamError) {
+  const server = error.context?.serverErrorCode;
+  if (error.code === 'conflict' && error.detail?.kind === 'stream_closed')
+    return new TerminalReadError('stream_closed');
+  if (
+    error.code === 'not_found' ||
+    error.code === 'bad_request' ||
+    server === 'space_not_found' ||
+    server === 'space_deleted' ||
+    server === 'space_generation_fenced'
+  )
+    return new TerminalReadError(server ?? error.code);
+  return new Error(error.code);
+}
 async function readAttempt<T>(
   state: SessionState,
   stage: ReadStage,
@@ -1402,18 +1443,29 @@ export async function openSession(
   event('syncing');
   void (async () => {
     try {
-      let size = 0;
+      // One sync window runs from a bootstrap or a live read to the next
+      // up-to-date response. Its bytes and pages are bounded; transient
+      // retries keep the window, and an up-to-date response starts a new one.
+      let windowBytes = 0;
+      let windowPages = 0;
       let offset = '-1';
       let cursor: string | undefined;
       let upToDate = false;
+      // Cursor recoveries not yet followed by a successful read.
+      let recoveries = 0;
+      const endWindow = () => {
+        windowBytes = 0;
+        windowPages = 0;
+      };
       const consume = (bytes: Uint8Array, snapshot = false) => {
-        size += bytes.length;
-        if (size > 32 * 1024 * 1024) throw new Error('session_limit');
+        windowBytes += bytes.length;
+        if (windowBytes > SESSION_WINDOW_BYTES)
+          throw new TerminalReadError('session_limit');
         if (snapshot) state.doc.import(unpack(bytes));
         else importUpdates(state.doc, bytes);
         state.roostReader?.wake();
       };
-      const readBootstrap = (retired?: { offset: string; cursor?: string }) =>
+      const readBootstrap = () =>
         retrySessionRead(
           controller.signal,
           () =>
@@ -1427,13 +1479,7 @@ export async function openSession(
               const result = await state.client.bootstrap({
                 signal: controller.signal,
               });
-              if (!result.ok) throw new Error(result.result.code);
-              if (
-                retired &&
-                retired.offset === result.result.nextOffset &&
-                retired.cursor === result.result.cursor
-              )
-                throw new Error('cursor_expired');
+              if (!result.ok) throw streamReadError(result.result);
               return result.result;
             }),
           retryStream,
@@ -1441,16 +1487,45 @@ export async function openSession(
       const applyBootstrap = (
         data: Awaited<ReturnType<typeof readBootstrap>>,
       ) => {
-        size = 0;
+        endWindow();
         if (data.snapshotOffset !== '-1' && data.snapshot)
           consume(data.snapshot.body, true);
         for (const part of data.updates) consume(part.body);
         offset = data.nextOffset;
         cursor = data.cursor;
         upToDate = data.upToDate;
-        if (upToDate) loroProgress.clear();
+        if (upToDate) {
+          endWindow();
+          loroProgress.clear();
+        }
+      };
+      // The server retired the history before `expired`. Import a fresh
+      // bootstrap into the same document (CRDT import is idempotent) and resume
+      // after it. A bootstrap that does not move past `expired`, or a later
+      // 410 before any successful read, counts against the bound.
+      const recoverCursor = async (expired: string) => {
+        for (;;) {
+          if (recoveries >= MAX_CURSOR_RECOVERIES)
+            throw new TerminalReadError('cursor_expired');
+          if (recoveries > 0)
+            await waitBeforeRead(
+              controller.signal,
+              CURSOR_RECOVERY_DELAY_MS * 2 ** (recoveries - 1),
+            );
+          recoveries++;
+          loroProgress.clear();
+          state.streamReady = false;
+          retrying(new Error('cursor_expired'));
+          const data = await readBootstrap();
+          if (sessions.get(id) !== state) return false;
+          if (!offsetAfter(data.nextOffset, expired)) continue;
+          applyBootstrap(data);
+          return true;
+        }
       };
       const readPage = async (stage: 'catchup' | 'poll') => {
+        if (!upToDate && ++windowPages > SESSION_WINDOW_PAGES)
+          throw new TerminalReadError('session_limit');
         let livePoll = false;
         const next = await retrySessionRead(
           controller.signal,
@@ -1466,31 +1541,20 @@ export async function openSession(
                 signal: controller.signal,
                 ...(livePoll ? { live: 'long-poll' as const } : {}),
               });
-              if (!result.ok) {
-                const code = result.result.context?.serverErrorCode;
-                if (
-                  result.result.code === 'gone' &&
-                  code !== 'space_deleted' &&
-                  code !== 'space_generation_fenced' &&
-                  code !== 'space_not_found'
-                )
-                  return null;
-                throw new Error(result.result.code);
-              }
+              // 410 on a durable read means only that `offset` is below the
+              // retained history; it is recovered outside this retry loop.
+              if (!result.ok && result.result.code === 'gone') return null;
+              if (!result.ok) throw streamReadError(result.result);
               return result.result;
             }),
           retryStream,
         );
         if (sessions.get(id) !== state) return;
         if (next === null) {
-          loroProgress.clear();
-          state.streamReady = false;
-          retrying(new Error('cursor_expired'));
-          const data = await readBootstrap({ offset, cursor });
-          if (sessions.get(id) !== state) return;
-          applyBootstrap(data);
+          if (!(await recoverCursor(offset))) return;
           return { changed: true, hasBytes: true, livePoll: false };
         }
+        recoveries = 0;
         if (next.payload) consume(next.payload.body);
         if (next.nextOffset === offset && !next.upToDate)
           throw new Error('stalled_cursor');
@@ -1499,7 +1563,10 @@ export async function openSession(
         upToDate = next.upToDate;
         if (next.closed) throw new Error('stream_closed');
         loroProgress.advance(offset);
-        if (upToDate) loroProgress.clear();
+        if (upToDate) {
+          endWindow();
+          loroProgress.clear();
+        }
         return {
           changed: Boolean(next.payload),
           hasBytes: Boolean(next.payload?.body.length),
@@ -1509,11 +1576,8 @@ export async function openSession(
       const initial = await readBootstrap();
       if (sessions.get(id) !== state) return;
       applyBootstrap(initial);
-      let pages = 0;
-      while (!upToDate && !controller.signal.aborted) {
-        if (++pages > 100) throw new Error('session_limit');
+      while (!upToDate && !controller.signal.aborted)
         if (!(await readPage('catchup'))) return;
-      }
       let target: SessionTarget | undefined = resolveTarget
         ? undefined
         : { backend: 'loro' };
@@ -1711,7 +1775,6 @@ export async function openSession(
           }
         })();
       }
-      pages = 0;
       let changed = true;
       while (!controller.signal.aborted) {
         if (upToDate) {
@@ -1720,11 +1783,7 @@ export async function openSession(
           if (changed || state.status !== 'live')
             event(state.ready ? 'live' : 'syncing');
           changed = false;
-          pages = 0;
-        } else {
-          if (!state.streamReady) event('syncing');
-          if (++pages > 100) throw new Error('session_limit');
-        }
+        } else if (!state.streamReady) event('syncing');
         const next = await readPage(upToDate ? 'poll' : 'catchup');
         if (!next) return;
         changed ||= next.changed;

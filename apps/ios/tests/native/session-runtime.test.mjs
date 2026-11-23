@@ -4777,6 +4777,418 @@ test(
   },
 );
 
+const hang = (request) =>
+  new Promise((_, reject) =>
+    request.signal.addEventListener(
+      'abort',
+      () => reject(request.signal.reason),
+      { once: true },
+    ),
+  );
+const MiB = 1024 * 1024;
+/** Offsets as Streams sends them: zero-padded 20-digit decimals. */
+const offsetOf = (value) => String(value).padStart(20, '0');
+const ok = (result) => ({ ok: true, result });
+const gone = () => ({ ok: false, result: { code: 'gone', status: 410 } });
+function historyDoc(...ids) {
+  const doc = new LoroDoc();
+  for (const id of ids)
+    doc.getList('history').push({
+      id,
+      role: 'user',
+      timestamp: '2026-01-01',
+      items: [{ type: 'text', text: id }],
+    });
+  doc.commit();
+  return doc;
+}
+/** A 10 MiB Loro update frame; importing it again changes nothing. */
+const largeUpdate = (() => {
+  let bytes;
+  return () => {
+    if (bytes) return bytes;
+    const doc = new LoroDoc();
+    const bulk = doc.getMap('bulk');
+    for (let i = 0; i < 640; i++) bulk.set(String(i), 'x'.repeat(16 * 1024));
+    doc.commit();
+    return (bytes = frame(doc.export({ mode: 'update' })));
+  };
+})();
+
+/**
+ * Opens a Loro session against a scripted Streams client. Retry and recovery
+ * waits are recorded and skipped instead of slept.
+ */
+async function openScriptedSession(t, { bootstrap, readOnce }) {
+  const runtime = await loadRuntime();
+  runtime.setSyncProgressClock(unthrottledProgressClock());
+  const waits = [];
+  runtime.setReadRetryTimer(async (delayMs) => {
+    waits.push(delayMs);
+  });
+  const calls = { bootstraps: 0, reads: [] };
+  globalThis.__sessionClient = class {
+    async bootstrap() {
+      return bootstrap(++calls.bootstraps);
+    }
+    async readOnce(request) {
+      calls.reads.push(request.offset);
+      return readOnce(request, calls);
+    }
+    async head() {
+      return { ok: false, result: { code: 'not_found', status: 404 } };
+    }
+    append() {
+      assert.fail('reads never append');
+    }
+  };
+  t.after(() => {
+    runtime.stopSessions();
+    runtime.setReadRetryTimer();
+    delete globalThis.__sessionClient;
+  });
+  const envelopes = [];
+  const progress = [];
+  const waiting = [];
+  await runtime.openSession(
+    's1',
+    'w1',
+    async () => ({ token: 'synthetic', gatewayBaseUrl: 'https://x.invalid' }),
+    (event) => {
+      if (event.type === 'sessionSyncProgress')
+        progress.push(event.progress ?? null);
+      else if (event.session) {
+        const envelope = JSON.parse(event.session);
+        envelopes.push(envelope);
+        for (const waiter of [...waiting])
+          if (waiter.matches(envelope)) {
+            waiting.splice(waiting.indexOf(waiter), 1);
+            waiter.resolve(envelope);
+          }
+      }
+    },
+    async () => assert.fail('reads never dispatch'),
+  );
+  return {
+    calls,
+    waits,
+    envelopes,
+    progress,
+    until(matches) {
+      const found = envelopes.find(matches);
+      if (found) return Promise.resolve(found);
+      const waiter = { matches, ...Promise.withResolvers() };
+      waiting.push(waiter);
+      return waiter.promise;
+    },
+  };
+}
+
+test(
+  'a long-suspended session keeps its history and resumes after its cursor expires, without duplicating turns',
+  { timeout: 8000 },
+  async (t) => {
+    const author = historyDoc('before-suspend');
+    const original = author.export({ mode: 'snapshot' });
+    const from = author.version();
+    author.getList('history').push({
+      id: 'while-suspended',
+      role: 'user',
+      timestamp: '2026-01-02',
+      items: [{ type: 'text', text: 'while-suspended' }],
+    });
+    author.commit();
+    const update = frame(author.export({ mode: 'update', from }));
+    const resumed = Promise.withResolvers();
+    const session = await openScriptedSession(t, {
+      bootstrap: (n) =>
+        ok(
+          n === 1
+            ? {
+                snapshotOffset: offsetOf(10),
+                snapshot: { body: original },
+                updates: [],
+                nextOffset: offsetOf(10),
+                cursor: 'c10',
+                upToDate: true,
+              }
+            : {
+                // The retained history overlaps what the replica already has.
+                snapshotOffset: offsetOf(20),
+                snapshot: { body: author.export({ mode: 'snapshot' }) },
+                updates: [{ body: update }],
+                nextOffset: offsetOf(20),
+                cursor: 'c20',
+                upToDate: true,
+              },
+        ),
+      readOnce: (request) => {
+        if (request.offset === offsetOf(10)) return gone();
+        resumed.resolve();
+        return hang(request);
+      },
+    });
+    await resumed.promise;
+    assert.equal(session.calls.bootstraps, 2);
+    assert.deepEqual(session.calls.reads, [offsetOf(10), offsetOf(20)]);
+    const ids = (envelope) => envelope.entries.map(({ id }) => id);
+    const first = session.envelopes.findIndex((e) => e.entries.length > 0);
+    assert.ok(
+      session.envelopes.some(
+        (e) => e.status === 'syncing' && e.reason === 'cursor_expired',
+      ),
+    );
+    // The replica is never replaced by a blank document during recovery.
+    assert.ok(
+      session.envelopes.slice(first).every((e) => e.entries.length > 0),
+    );
+    assert.equal(session.envelopes.at(-1).status, 'live');
+    assert.deepEqual(ids(session.envelopes.at(-1)), [
+      'before-suspend',
+      'while-suspended',
+    ]);
+    assert.deepEqual(session.waits, []);
+  },
+);
+
+test(
+  'a cursor that keeps expiring ends offline as cursor_expired after three recovery bootstraps, with progress cleared',
+  { timeout: 8000 },
+  async (t) => {
+    const snapshot = historyDoc('kept').export({ mode: 'snapshot' });
+    const session = await openScriptedSession(t, {
+      bootstrap: (n) =>
+        ok({
+          snapshotOffset: offsetOf(n * 10),
+          snapshot: { body: snapshot },
+          updates: [],
+          nextOffset: offsetOf(n * 10),
+          upToDate: false,
+        }),
+      readOnce: () => gone(),
+    });
+    const offline = await session.until((e) => e.status === 'offline');
+    assert.equal(offline.reason, 'cursor_expired');
+    // One opening bootstrap and three recoveries, backing off from 1 s.
+    assert.equal(session.calls.bootstraps, 4);
+    assert.deepEqual(session.waits, [1000, 2000]);
+    assert.deepEqual(
+      offline.entries.map(({ id }) => id),
+      ['kept'],
+    );
+    assert.ok(session.progress.some((progress) => progress !== null));
+    assert.equal(session.progress.at(-1), null);
+  },
+);
+
+test(
+  'expired cursors that each recover to a successful read never exhaust the recovery bound',
+  { timeout: 8000 },
+  async (t) => {
+    const snapshot = historyDoc('kept').export({ mode: 'snapshot' });
+    const settled = Promise.withResolvers();
+    const session = await openScriptedSession(t, {
+      bootstrap: (n) =>
+        ok({
+          snapshotOffset: offsetOf(n * 10),
+          snapshot: { body: snapshot },
+          updates: [],
+          nextOffset: offsetOf(n * 10),
+          upToDate: true,
+        }),
+      readOnce: (request, calls) => {
+        const offset = Number(request.offset);
+        if (calls.bootstraps === 6) {
+          settled.resolve();
+          return hang(request);
+        }
+        // Each recovery reads successfully once, then its cursor expires again.
+        return offset % 10 === 0
+          ? ok({
+              nextOffset: offsetOf(offset + 1),
+              upToDate: false,
+              closed: false,
+            })
+          : gone();
+      },
+    });
+    await settled.promise;
+    assert.equal(session.calls.bootstraps, 6);
+    assert.deepEqual(session.waits, []);
+    assert.ok(session.envelopes.every((e) => e.status !== 'offline'));
+    assert.equal(session.envelopes.at(-1).status, 'live');
+  },
+);
+
+test(
+  'a deleted, fenced or missing session stream goes offline at once without retrying or bootstrapping again',
+  { timeout: 8000 },
+  async (t) => {
+    const snapshot = historyDoc('kept').export({ mode: 'snapshot' });
+    for (const [error, reason] of [
+      [
+        {
+          code: 'conflict',
+          status: 409,
+          context: { serverErrorCode: 'space_deleted' },
+        },
+        'space_deleted',
+      ],
+      [
+        {
+          code: 'conflict',
+          status: 409,
+          context: { serverErrorCode: 'space_generation_fenced' },
+        },
+        'space_generation_fenced',
+      ],
+      [{ code: 'not_found', status: 404 }, 'not_found'],
+    ]) {
+      const session = await openScriptedSession(t, {
+        bootstrap: () =>
+          ok({
+            snapshotOffset: offsetOf(10),
+            snapshot: { body: snapshot },
+            updates: [],
+            nextOffset: offsetOf(10),
+            upToDate: true,
+          }),
+        readOnce: () => ({ ok: false, result: error }),
+      });
+      const offline = await session.until((e) => e.status === 'offline');
+      assert.equal(offline.reason, reason);
+      assert.equal(session.calls.bootstraps, 1);
+      assert.equal(session.calls.reads.length, 1);
+      assert.deepEqual(session.waits, []);
+    }
+  },
+);
+
+test(
+  'an expired-cursor recovery gets its own 32 MiB window after a large catch-up',
+  { timeout: 30000 },
+  async (t) => {
+    // About 20 MiB of snapshot from incompressible, deterministic text.
+    let seed = 1;
+    const noise = (length) => {
+      let text = '';
+      for (let i = 0; i < length; i++) {
+        seed ^= seed << 13;
+        seed ^= seed >>> 17;
+        seed ^= seed << 5;
+        text += String.fromCharCode(48 + ((seed >>> 0) % 64));
+      }
+      return text;
+    };
+    const bulk = new LoroDoc();
+    for (let i = 0; i < 640; i++)
+      bulk.getMap('bulk').set(String(i), noise(16 * 1024));
+    bulk.commit();
+    const replacement = bulk.export({ mode: 'snapshot' });
+    const streamed = 3 * largeUpdate().byteLength;
+    // Neither part alone exceeds the window; together they would.
+    assert.ok(streamed < 32 * MiB && replacement.byteLength < 32 * MiB);
+    assert.ok(streamed + replacement.byteLength > 32 * MiB);
+    const resumed = Promise.withResolvers();
+    const session = await openScriptedSession(t, {
+      bootstrap: (n) =>
+        ok(
+          n === 1
+            ? {
+                snapshotOffset: '-1',
+                updates: [],
+                nextOffset: offsetOf(10),
+                upToDate: false,
+              }
+            : {
+                snapshotOffset: offsetOf(20),
+                snapshot: { body: replacement },
+                updates: [],
+                nextOffset: offsetOf(20),
+                upToDate: true,
+              },
+        ),
+      readOnce: (request) => {
+        const offset = Number(request.offset);
+        if (offset < 13)
+          return ok({
+            payload: { body: largeUpdate() },
+            nextOffset: offsetOf(offset + 1),
+            upToDate: false,
+            closed: false,
+          });
+        if (offset === 13) return gone();
+        resumed.resolve();
+        return hang(request);
+      },
+    });
+    await resumed.promise;
+    assert.equal(session.calls.bootstraps, 2);
+    assert.ok(session.envelopes.every((e) => e.status !== 'offline'));
+    assert.equal(session.envelopes.at(-1).status, 'live');
+  },
+);
+
+test(
+  'a live session that receives more than 32 MiB across up-to-date reads stays live',
+  { timeout: 30000 },
+  async (t) => {
+    const snapshot = historyDoc('kept').export({ mode: 'snapshot' });
+    const idle = Promise.withResolvers();
+    const session = await openScriptedSession(t, {
+      bootstrap: () =>
+        ok({
+          snapshotOffset: offsetOf(10),
+          snapshot: { body: snapshot },
+          updates: [],
+          nextOffset: offsetOf(10),
+          upToDate: true,
+        }),
+      readOnce: (request) => {
+        const offset = Number(request.offset);
+        if (offset < 14)
+          return ok({
+            payload: { body: largeUpdate() },
+            nextOffset: offsetOf(offset + 1),
+            upToDate: true,
+            closed: false,
+          });
+        idle.resolve();
+        return hang(request);
+      },
+    });
+    await idle.promise;
+    assert.ok(4 * largeUpdate().byteLength > 32 * MiB);
+    assert.equal(session.calls.bootstraps, 1);
+    assert.ok(session.envelopes.every((e) => e.status !== 'offline'));
+    assert.equal(session.envelopes.at(-1).status, 'live');
+  },
+);
+
+test(
+  'a bootstrap larger than 32 MiB ends offline as session_limit without retrying',
+  { timeout: 8000 },
+  async (t) => {
+    const session = await openScriptedSession(t, {
+      bootstrap: () =>
+        ok({
+          snapshotOffset: offsetOf(10),
+          // The budget is checked before import, so the bytes are never parsed.
+          snapshot: { body: new Uint8Array(32 * MiB + 1) },
+          updates: [],
+          nextOffset: offsetOf(10),
+          upToDate: true,
+        }),
+      readOnce: (request) => hang(request),
+    });
+    const offline = await session.until((e) => e.status === 'offline');
+    assert.equal(offline.reason, 'session_limit');
+    assert.equal(session.calls.bootstraps, 1);
+    assert.deepEqual(session.calls.reads, []);
+    assert.deepEqual(session.waits, []);
+  },
+);
+
 test('busy turns use the OSS FIFO queue, durable before watermark; lost ACK is never replayed', async () => {
   let fail = false;
   const watermarks = [];

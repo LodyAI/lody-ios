@@ -80,6 +80,22 @@ Intermediate counts reach the host at most every 100 ms; the first count, a new
 kind or total, completion and the clear go out at once. Loro counts stay hidden
 until session metadata names the Loro backend, so Roost sessions never show
 their control document's bytes.
+The session stream reads in sync windows. A window starts at a bootstrap or
+after an up-to-date read and may import 32 MiB, its bootstrap snapshot
+included, and 100 catch-up pages; reaching up to date starts a new window, and
+transient retries keep the current one. A bootstrap that alone exceeds the
+window ends the read offline with `session_limit`. A 410 read means the server
+no longer retains history at the cursor. The runtime marks the session
+`syncing` with `cursor_expired`, restarts progress, and imports a fresh
+bootstrap into the same document; CRDT import is idempotent, so the transcript
+stays visible and no turn repeats. The bootstrap must end after the expired
+offset (compared as decimals). Recoveries without a successful read in between
+are bounded: the second and third wait 1 s and 2 s, and a fourth expiry ends
+offline with `cursor_expired`, which the host's reconnect retries. A deleted,
+fenced or missing space or stream (404, 409 `space_deleted` /
+`space_generation_fenced`), a closed stream or a rejected request ends the read
+offline at once. Network, timeout, 429, 5xx and authorization failures (after a
+grant refresh) retry the same offset without a bootstrap.
 Ready Roost inputs use the same workspace input coordinator as Lody and its
 account/workspace-scoped IndexedDB storage. It persists the exact input before
 handoff, orders inputs by session and checks the owner after an uncertain
