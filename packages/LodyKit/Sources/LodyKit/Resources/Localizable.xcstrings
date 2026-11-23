@@ -24616,6 +24616,23 @@
         }
       }
     },
+    "chat.work.unconfirmed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent status unconfirmed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行状态待确认"
+          }
+        }
+      }
+    },
     "session.owner.change": {
       "extractionState": "manual",
       "localizations": {

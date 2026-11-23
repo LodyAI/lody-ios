@@ -880,6 +880,20 @@ export function refreshSessionUsage() {
     if (usage !== state.lastUsage) flush(state);
   }
 }
+/** Sessions with fresh active Presence; `undefined` until Presence has joined. */
+let activePresenceSessions: ReadonlySet<string> | undefined;
+const sessionPresence = (id: string) => activePresenceSessions?.has(id);
+/** Presence can end work while the transcript stream is quiet. */
+export function updateActiveSessionPresence(
+  ids: ReadonlySet<string> | undefined,
+) {
+  const previous = new Map(
+    [...sessions.keys()].map((id) => [id, sessionPresence(id)]),
+  );
+  activePresenceSessions = ids;
+  for (const state of sessions.values())
+    if (previous.get(state.id) !== sessionPresence(state.id)) flush(state);
+}
 function flush(state: SessionState) {
   clearTimeout(state.pending);
   state.pending = undefined;
@@ -909,6 +923,8 @@ function flush(state: SessionState) {
   const finish = (next: typeof snapshot) => {
     if (next.usage) next.usage = { ...next.usage, ...quota };
     if (loro) next.historyHasMore = start > 0 && !state.historyClipped;
+    const presence = sessionPresence(state.id);
+    if (presence !== undefined) next.hasActivePresence = presence;
     return next;
   };
   snapshot = finish(snapshot);
@@ -1086,6 +1102,7 @@ export function releaseReserve(id: string) {
   trimSessions();
 }
 export function stopSessions() {
+  activePresenceSessions = undefined;
   for (const state of sessions.values()) {
     settleControls(state, new Error('session_not_ready'));
     clearTimeout(state.pending);

@@ -33,6 +33,7 @@ struct SessionFeedState: Equatable, Sendable {
   var preview: SessionBrowserPreview?
   var transcript = SessionTranscriptFacts()
   var isLiveUpdate = false
+  var hasActivePresence: Bool?
 }
 
 @MainActor
@@ -207,6 +208,7 @@ final class SessionFeed {
       state.sendReady = false
       state.controlReady = false
     }
+    state.hasActivePresence = envelope.hasActivePresence
     changed?()
   }
 }

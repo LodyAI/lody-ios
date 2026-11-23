@@ -143,6 +143,11 @@ export type Envelope = {
   usage?: SessionUsage;
   historyHasMore?: boolean;
   historyLoading?: boolean;
+  /**
+   * Fresh session Presence reports active work (running, initializing or
+   * waiting for permission). Absent until workspace Presence has joined.
+   */
+  hasActivePresence?: boolean;
   /** Locally persisted owner inputs whose delivery is still being reconciled. */
   pendingRoostInputs?: readonly Record<string, unknown>[];
   awaitingUserSince?: number;

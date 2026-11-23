@@ -15,6 +15,7 @@ import {
   setSessionUsageReader,
   setSessionSendObserver,
   refreshSessionUsage,
+  updateActiveSessionPresence,
 } from './session';
 import { machineRpc } from './machine-rpc';
 import { retrySessionRead } from './session-read';
@@ -148,10 +149,20 @@ const { machineReplicas, catalogs, unhealthy } = state;
 let stopPresence: (() => void) | undefined;
 function startPresence() {
   stopPresence?.();
-  stopPresence = watchMachinePresence(state.workspace, getGrant, (value) => {
-    state.presence = value;
-    channel.emit('machinePresence', value);
-  });
+  const { workspace, userId } = state;
+  const isCurrent = () =>
+    state.workspace === workspace && state.userId === userId;
+  stopPresence = watchMachinePresence(
+    workspace,
+    getGrant,
+    (value) => {
+      state.presence = value;
+      channel.emit('machinePresence', value);
+    },
+    (ids) => {
+      if (isCurrent()) updateActiveSessionPresence(ids);
+    },
+  );
 }
 
 /** What the Status view layout and planner read, at the server clock's now. */

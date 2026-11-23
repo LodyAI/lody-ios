@@ -55,6 +55,47 @@ export function onlineMachines(
   return [...ids].sort();
 }
 
+const ACTIVE_SESSION_STATUSES = new Set([
+  'running',
+  'initializing',
+  'requestPermission',
+]);
+
+/**
+ * Sessions with fresh active session Presence. Like `onlineMachines`, freshness
+ * compares the publisher's `updatedAt` with this device's clock, so clock skew
+ * between the phone and the machine shifts the 90-second window.
+ */
+export function freshActiveSessions(
+  states: Record<string, unknown>,
+  now: number,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const value of Object.values(states)) {
+    if (!value || typeof value !== 'object') continue;
+    const state = value as Record<string, unknown>;
+    const status = state.status as Record<string, unknown> | undefined;
+    if (
+      state.kind !== 'session' ||
+      typeof state.sessionId !== 'string' ||
+      !state.sessionId ||
+      typeof state.machineId !== 'string' ||
+      !state.machineId ||
+      typeof state.instanceId !== 'string' ||
+      !state.instanceId ||
+      typeof state.updatedAt !== 'number' ||
+      !Number.isFinite(state.updatedAt) ||
+      now - state.updatedAt >= machinePresenceTTL ||
+      !status ||
+      typeof status !== 'object' ||
+      !ACTIVE_SESSION_STATUSES.has(status.type as string)
+    )
+      continue;
+    ids.add(state.sessionId);
+  }
+  return ids;
+}
+
 type Grant = {
   token: string;
   gatewayBaseUrl: string;
@@ -75,19 +116,37 @@ export function watchMachinePresence(
   workspace: string,
   getGrant: () => Promise<Grant>,
   publish: (value: MachinePresence) => void,
+  /**
+   * Active session ids once the room has joined, which includes its initial
+   * Presence sync; `undefined` while Presence is unknown.
+   */
+  publishActiveSessions: (
+    ids: ReadonlySet<string> | undefined,
+  ) => void = () => {},
 ) {
   let stopped = false;
   let generation = 0;
   let close = () => {};
   let retry: ReturnType<typeof setTimeout> | undefined;
   let last = '';
+  // `null` until the first publication, so the initial unknown state is sent.
+  let lastActive: string | undefined | null = null;
   const emit = (value: MachinePresence) => {
     const next = JSON.stringify(value);
     if (last === next) return;
     last = next;
     publish(value);
   };
-  const unknown = () => emit({ state: 'unknown', onlineMachineIds: [] });
+  const emitActive = (ids: Set<string> | undefined) => {
+    const next = ids && [...ids].sort().join('\n');
+    if (next === lastActive) return;
+    lastActive = next;
+    publishActiveSessions(ids);
+  };
+  const unknown = () => {
+    emit({ state: 'unknown', onlineMachineIds: [] });
+    emitActive(undefined);
+  };
   const start = async () => {
     const version = ++generation;
     close();
@@ -104,11 +163,11 @@ export function watchMachinePresence(
       let joined = false;
       let disconnectedAt = Date.now();
       const emitSnapshot = () => {
-        if (!stopped && version === generation && joined)
-          emit({
-            state: 'live',
-            onlineMachineIds: onlineMachines(store.getAllStates(), Date.now()),
-          });
+        if (stopped || version !== generation || !joined) return;
+        const states = store.getAllStates();
+        const now = Date.now();
+        emit({ state: 'live', onlineMachineIds: onlineMachines(states, now) });
+        emitActive(freshActiveSessions(states, now));
       };
       const detach = store.subscribe(emitSnapshot);
       const tick = setInterval(() => {

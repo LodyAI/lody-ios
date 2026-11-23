@@ -244,6 +244,16 @@ extension LodyChatView {
       now: now,
       turnStartedAt: turnStartedAt
     )
+    if hasActivePresence == false {
+      // The Agent cleared its active Presence before the final transcript update
+      // arrived. Keep the reply, but stop counting and say the status is unconfirmed.
+      for index in projected.indices where projected[index].kind == "duration" && projected[index].running {
+        projected[index].running = false
+        projected[index].text = String(localized: "chat.work.unconfirmed", bundle: .lody)
+        projected[index].detail = ""
+        projected[index].workDurationMs = nil
+      }
+    }
     deferredRows = deferredRows.filter { id, _ in transcript.entries.contains { $0.id == id } }
     if !deferredRows.isEmpty {
       let byEntry = Dictionary(grouping: projected, by: \.entryID)
