@@ -188,11 +188,17 @@ struct ChatActionBarContent: View {
         .lodyTextStyle(.caption)
         .monospacedDigit()
         .foregroundStyle(LodyColor.textSecondary)
-      ProgressView(value: progress.total.map { _ in Double(progress.received) }, total: Double(progress.total ?? 1))
-        .progressViewStyle(.linear)
-        .tint(LodyColor.accentDefault)
-        .frame(width: 112)
-        .accessibilityHidden(true)
+      Group {
+        if let total = progress.total {
+          ProgressView(value: Double(progress.received), total: Double(total))
+            .progressViewStyle(.linear)
+            .tint(LodyColor.accentDefault)
+        } else {
+          ChatIndeterminateProgressBar()
+        }
+      }
+      .frame(width: 112)
+      .accessibilityHidden(true)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(label)
@@ -951,3 +957,27 @@ struct ChatMachinePanel: View {
 }
 
 #endif
+
+/// A linear `ProgressView` without a value has no indeterminate animation on iOS (UIProgressView draws an
+/// empty track), so an unknown total sweeps a short segment across the same 4 pt track instead.
+private struct ChatIndeterminateProgressBar: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+      let period = 1.2
+      // Reduce Motion keeps the segment still at the centre.
+      let phase = reduceMotion ? 0.5 : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+      GeometryReader { proxy in
+        let segment = proxy.size.width * 0.3
+        Capsule()
+          .fill(LodyColor.accentDefault)
+          .frame(width: segment)
+          .offset(x: (proxy.size.width + segment) * phase - segment)
+      }
+      .frame(height: 4)
+      .background(LodyColor.fillTertiary)
+      .clipShape(Capsule())
+    }
+  }
+}
