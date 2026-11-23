@@ -41,6 +41,20 @@ export function registerSharing(ctx: RuntimeContext) {
       const user = state.userId;
       const session = createMobileRoostSessionData({
         accountId: user,
+        cloud: {
+          metadata: () => {
+            const current = state.metaReplica?.flock;
+            return current
+              ? sessionActionMeta(
+                  current.get(['m', room]),
+                  current.scan({ prefix: ['m', room] }),
+                  current.get(['e', room]),
+                )
+              : undefined;
+          },
+          observe: (wake) =>
+            state.metaReplica?.flock.subscribe(wake) ?? (() => {}),
+        },
         workspaceId: workspace,
         machineId: meta.machineId,
         sessionId: id,

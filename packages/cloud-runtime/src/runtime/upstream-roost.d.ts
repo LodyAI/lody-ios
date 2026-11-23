@@ -81,6 +81,9 @@ export type RoostSessionData = ReturnType<
 >;
 
 export function createRemoteRoostSessionDataFactory(options: {
+  cloudHistory?: (
+    sessionId: string,
+  ) => ReturnType<typeof createRoostHistoryReplica>;
   accountId?: string | null;
   workspaceId: string;
   machineId: string;
@@ -163,6 +166,33 @@ export function createRemoteRoostSessionDataFactory(options: {
   snapshots: {
     capture(): Promise<{ history: Record<string, unknown>[] }>;
   };
+  dispose: () => void;
+};
+
+type RoostCloudBinding = { generation: string; ownerPublicKey: string };
+type RoostCloudGrant = {
+  binding: RoostCloudBinding;
+  streamUrl: string;
+  token: string;
+  expiresIn: number;
+};
+export function roostCloudHistoryBinding(
+  meta?: Record<string, unknown>,
+): RoostCloudBinding | undefined;
+export function parseRoostCloudHistoryGrant(value: unknown): RoostCloudGrant;
+export function createRoostHistoryReplica(options: {
+  accountId?: string | null;
+  workspaceId: string;
+  machineId: string;
+  sessionId: string;
+  replicaNamespace: string;
+  getBinding: () => RoostCloudBinding | undefined;
+  observeBinding: (wake: () => void) => () => void;
+  requestGrant: (signal: AbortSignal) => Promise<RoostCloudGrant>;
+  onSyncState?: (state: { checkpoint: string } | { reason: string }) => void;
+}): {
+  history: RoostSessionData['history'];
+  refresh: () => void;
   dispose: () => void;
 };
 

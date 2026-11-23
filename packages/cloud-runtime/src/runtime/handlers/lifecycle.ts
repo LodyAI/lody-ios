@@ -25,6 +25,7 @@ import {
   machineSupportsSessionHistoryInspection,
   machineSupportsSessionInputAcceptance,
   machineSupportsSessionInputDispatch,
+  roostCloudHistoryBinding,
   type SendMetadata,
 } from '../upstream-roost.js';
 
@@ -70,10 +71,19 @@ export function registerLifecycle(ctx: RuntimeContext) {
             protocolCapabilities?: Record<string, unknown>;
           }
         | undefined;
-      if (!machineSupportsSessionHistoryProtocol(capabilityCarrier))
+      if (
+        !machineSupportsSessionHistoryProtocol(capabilityCarrier) &&
+        !roostCloudHistoryBinding(meta)
+      )
         throw new Error('roost_history_unsupported');
       return {
         backend: 'roost' as const,
+        cloud: {
+          metadata: () =>
+            isCurrent() ? getDocMeta(`session-${id}`)?.meta : undefined,
+          observe: (wake: () => void) =>
+            state.metaReplica?.flock.subscribe(wake) ?? (() => {}),
+        },
         accountId: user,
         machineId: meta.machineId as string,
         incremental:

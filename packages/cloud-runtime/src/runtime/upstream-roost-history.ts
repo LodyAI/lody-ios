@@ -1,6 +1,9 @@
 import {
   createRemoteRoostSessionDataFactory,
+  createRoostHistoryReplica,
+  parseRoostCloudHistoryGrant,
   readSessionHistoryMetadata,
+  roostCloudHistoryBinding,
 } from './upstream-roost.js';
 import { createRoostHistoryTransport, type RoostWindow } from './roost-history';
 
@@ -14,6 +17,11 @@ export function roostStorageAccount(accountId: string): string {
   return suffix ? JSON.stringify([suffix, accountId]) : accountId;
 }
 
+export type MobileRoostCloudHistory = {
+  metadata: () => Record<string, unknown> | undefined;
+  observe: (wake: () => void) => () => void;
+};
+
 type RoostSessionOptions = Parameters<typeof createRoostHistoryTransport>[0] & {
   accountId?: string | null;
   patches?: boolean;
@@ -21,6 +29,7 @@ type RoostSessionOptions = Parameters<typeof createRoostHistoryTransport>[0] & {
   incremental?: boolean;
   live?: boolean;
   onSubscription?: (state: { checkpoint: string } | { reason: string }) => void;
+  cloud?: MobileRoostCloudHistory;
 };
 
 export function createMobileRoostSessionData(
@@ -28,12 +37,45 @@ export function createMobileRoostSessionData(
   subscribeWake?: (wake: () => void) => () => void,
 ) {
   const transport = createRoostHistoryTransport(options);
+  const cloud = options.cloud;
   return createRemoteRoostSessionDataFactory({
     ...options,
     accountId: options.accountId
       ? roostStorageAccount(options.accountId)
       : options.accountId,
     active: () => !options.signal.aborted && (options.isCurrent?.() ?? true),
+    ...(cloud && {
+      cloudHistory: (sessionId: string) => {
+        return createRoostHistoryReplica({
+          accountId: options.accountId
+            ? roostStorageAccount(options.accountId)
+            : options.accountId,
+          workspaceId: options.workspaceId,
+          machineId: options.machineId,
+          sessionId,
+          replicaNamespace: 'mobile',
+          getBinding: () => roostCloudHistoryBinding(cloud.metadata()),
+          observeBinding: cloud.observe,
+          requestGrant: async (signal) => {
+            const scope = AbortSignal.any([signal, options.signal]);
+            scope.throwIfAborted();
+            if (options.isCurrent && !options.isCurrent())
+              throw new Error('workspace_changed');
+            const grant = await options.getHistoryProof({
+              workspaceId: options.workspaceId,
+              sessionId,
+              machineId: options.machineId,
+              cloudHistory: true,
+            });
+            scope.throwIfAborted();
+            if (options.isCurrent && !options.isCurrent())
+              throw new Error('workspace_changed');
+            return parseRoostCloudHistoryGrant(grant);
+          },
+          onSyncState: options.onSubscription,
+        });
+      },
+    }),
     subscribeWake,
     subscribeHistory: async (_machineId, _sessionId, open, publish, signal) => {
       let published = false;
@@ -145,9 +187,7 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
       });
     },
     async metadata() {
-      return readSessionHistoryMetadata({
-        readDirectory: data.history.readDirectory,
-      });
+      return readSessionHistoryMetadata(data.history);
     },
     async latest() {
       const started = generation;

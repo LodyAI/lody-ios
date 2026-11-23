@@ -4084,6 +4084,7 @@
                       "minLength": 1,
                       "maxLength": 256
                     },
+                    "cloudHistory": { "type": "boolean" },
                     "requestId": {
                       "type": "string",
                       "format": "uuid",

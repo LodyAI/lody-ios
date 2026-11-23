@@ -24,7 +24,9 @@ const READ_PROOF_REUSE_MS = 30_000;
 const readProofDenied = (error: unknown) =>
   error instanceof Error && error.message === 'session_history_read_denied';
 
-type Grant = () => Promise<{ token: string; gatewayBaseUrl: string }>;
+type Grant = (() => Promise<{ token: string; gatewayBaseUrl: string }>) & {
+  invalidate?: () => void;
+};
 type OwnerResponse = {
   type: string;
   sessionId: string;

@@ -37,30 +37,23 @@ unsupported machines create Loro sessions. The resulting backend is written in
 session metadata and never changed by this preference. New Tabs use the same
 selection policy.
 
-The session's metadata selects its history backend. For Roost, the runtime waits
-for the owner and its `sessionHistory` v4 capability, and negotiates incremental
-reads, subscriptions and patches separately. An existing nonempty Loro history can open
-without metadata after control-stream catchup; an explicitly Roost session or a
-retired Roost cursor never takes that fallback. The pinned upstream Roost bridge
-and history cache read and observe history, capture sharing snapshots, and submit
-permission responses through the encrypted owner RPC. The control document
-carries the shared queue and human-input receipts.
+The session's metadata selects its history backend. Roost history reads and
+sharing snapshots use the published Streams replica. The owner RPC handles
+permission responses and history changes. The control document carries the
+shared queue and human-input receipts.
 
-The owner publishes committed checkpoints over the reply stream for
-`session/history-subscribe`. The native runtime consumes that stream using
-Streams long-poll. The upstream reader applies inline deltas at their
-exact cached base and requests missing intervals from its last applied checkpoint.
-A renewed lease resumes from that same durable checkpoint. The runtime obtains
-scoped read and intent-bound write proofs through the native `historyToken`
-broker. Reads of the same session reuse a proof for up to 30 seconds and renew a
-reused proof once if the owner denies it. The owner checks current access on every
-read. Subscription leases and writes request their own proofs. The account
+The native `historyToken` broker obtains an exact-session Streams lease for the
+published history and intent-bound owner RPC proofs for writes. The runtime
+long-polls the history stream from its last locally applied position. The account
 credential stays native.
 
-Both the control stream and owner history must be ready before the runtime
+Both the control stream and published history must be ready before the runtime
 reports a Roost session as live. A failed read clears that reader's readiness
-while the other reader continues. After a history subscription failure, live
-readiness requires a fresh owner checkpoint that the transcript has loaded.
+while the other reader continues. The host obtains a short-lived exact-session
+Streams grant. The runtime opens the latest published window, backs scroll with
+older windows, and resumes from its durable applied offset. After a history
+subscription failure, live readiness requires a fresh checkpoint that the
+transcript has loaded.
 With the control stream caught up and a readable history window installed, Stop
 and Steer can target the known turn and permission requests can be answered
 while the subscription reconnects. Sending
@@ -89,13 +82,11 @@ input while its session is syncing; an owner may already
 have accepted it. Archiving or deleting a Roost session cancels its pending inputs through the shared
 coordinator before changing metadata. Signing out does not erase pending input data.
 
-The transcript opens with the latest owner page and requests older pages as the
-reader scrolls. The full history directory is read in the background for send
-configuration and turn counts. The upstream bridge applies negotiated patches,
-repairs bodies at the owner checkpoint, and resumes observation from its local
-cache. Both mobile runtime WebViews allow persistent browser storage for the
-upstream cache and pending-input database. Sharing takes an authoritative owner
-snapshot rather than exporting the loaded transcript window.
+The transcript opens with the latest published page and requests older pages as
+the reader scrolls. The full history directory is read in the background for
+send configuration and turn counts. Both mobile runtime WebViews allow
+persistent storage for the replica and pending inputs. Sharing captures the
+full published snapshot.
 
 ## Host contract
 

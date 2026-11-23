@@ -52,6 +52,7 @@ import {
 import type { ConversationSessionDataFactory } from './conversation-view/create-conversation-session';
 import type { SessionSnapshotService } from '@lody/shared/session-data';
 import { SessionHistoryChangesSchema } from '@lody/shared';
+import type { createRoostHistoryReplica } from './roost-history-replica';
 
 type HistoryReadResponse = Extract<
   LocalSessionControlResponse,
@@ -83,6 +84,7 @@ type RoostHistoryTransport = {
 };
 
 type RoostHistoryObservationOptions = {
+  readonly cloudHistory?: (sessionId: SessionId) => ReturnType<typeof createRoostHistoryReplica>;
   readonly coherentInspection?: boolean | (() => boolean);
   readonly incremental?: boolean | (() => boolean);
   readonly live?: boolean | (() => boolean);
@@ -265,6 +267,7 @@ const createRoostSessionDataFactoryFromTransport =
   ): ConversationSessionDataFactory =>
   ({ sessionId }) => {
     const transport = createTransport(sessionId);
+    const cloudHistory = options.cloudHistory?.(sessionId);
     const incrementalEnabled = () =>
       typeof options.incremental === 'function'
         ? options.incremental()
@@ -373,8 +376,6 @@ const createRoostSessionDataFactoryFromTransport =
         ) {
           throw new Error('Roost history read has no durable observation');
         }
-        // These bodies belong to the repair's checkpoint. The repair checks
-        // their revision and count and commits against its original cache head.
         if ((query.kind === 'readTurn' || query.kind === 'readRange') && query.atCheckpoint)
           return response;
         if (!coherentProgress && ownerRevision !== undefined && revision < ownerRevision) {
@@ -564,7 +565,9 @@ const createRoostSessionDataFactoryFromTransport =
     const adoptCachedHead = (head: RoostCachedHead) => {
       if (!head.checkpoint || head.checkpoint === appliedCheckpoint) return;
       const previousCount = observedHistoryCount ?? 0;
-      const changes = appliedCheckpoint ? roostCachedChangesSince(head, appliedCheckpoint) : undefined;
+      const changes = appliedCheckpoint
+        ? roostCachedChangesSince(head, appliedCheckpoint)
+        : undefined;
       appliedCheckpoint = head.checkpoint;
       // A different reader committed this projection. Fence reads and cursors
       // from the previous local view, including a retired owner generation.
@@ -853,8 +856,6 @@ const createRoostSessionDataFactoryFromTransport =
               try {
                 return await read();
               } catch (error) {
-                // Keep verified pages while retrying a timed-out body at the
-                // same checkpoint. A second failure returns to normal recovery.
                 if (!isHistoryReadTimeout(error)) throw error;
                 return read();
               }
@@ -1216,10 +1217,12 @@ const createRoostSessionDataFactoryFromTransport =
     };
 
     const unsubscribeWake = options.subscribeWake?.(() => {
+      if (cloudHistory) {
+        cloudHistory.refresh();
+        return;
+      }
       if (!active() || !subscriptionEnabled()) stopSubscription();
       startSubscription();
-      // Control hints remain useful for an explicit history read when the
-      // owner has no live subscription.
       if (!transport.subscribeHistory || !subscriptionEnabled()) scheduleRefresh();
     });
 
@@ -1315,6 +1318,10 @@ const createRoostSessionDataFactoryFromTransport =
       if (disposed) throw new Error('Roost session bridge is disposed');
       assertSerializableHistoryPayload(operation, payload);
       const receipt = await transport.writeHistory(operation, payload);
+      if (cloudHistory) {
+        cloudHistory.refresh();
+        return receipt.result;
+      }
       await notifyChanged(
         receipt.historyChange,
         receipt.historyRevision,
@@ -1361,7 +1368,9 @@ const createRoostSessionDataFactoryFromTransport =
     const snapshots: SessionSnapshotService = {
       capture: async (): Promise<SessionSnapshot> => {
         const snapshot = Object.freeze({
-          history: [...(await readEntries({ kind: 'readAll' }))],
+          history: [
+            ...(await (cloudHistory?.history.readAll() ?? readEntries({ kind: 'readAll' }))),
+          ],
         }) as unknown as SessionSnapshot;
         snapshotProvenance.add(snapshot);
         return snapshot;
@@ -1380,7 +1389,7 @@ const createRoostSessionDataFactoryFromTransport =
 
     const sessionData = createRoostSessionData({
       sessionId,
-      history,
+      history: cloudHistory?.history ?? history,
       commands,
       snapshots,
       inputAcceptance: {
@@ -1394,6 +1403,7 @@ const createRoostSessionDataFactoryFromTransport =
       },
       dispose: () => {
         disposed = true;
+        cloudHistory?.dispose();
         stopSubscription();
         unsubscribeWake?.();
         if (refreshTimer) clearTimeout(refreshTimer);

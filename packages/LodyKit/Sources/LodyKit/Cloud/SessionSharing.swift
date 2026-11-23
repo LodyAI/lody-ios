@@ -71,6 +71,15 @@ import Security
         intent["workspaceId"] as? String == workspace else { throw failure() }
       let edit = intent["requestId"] != nil
       guard edit == (intent["intentDigest"] != nil) else { throw failure() }
+      if let cloud = intent["cloudHistory"] {
+        guard (cloud as? Bool) == true, !edit else { throw failure() }
+        var target = intent
+        target.removeValue(forKey: "cloudHistory")
+        let grant = try await request("\(BackendEnvironment.site)/api/session-history/roost-read-grant",
+          credential: credential, body: target, transport: transport, timeout: 10)
+        try check()
+        return grant
+      }
       let endpoint = edit ? "request-edit-token" : "request-token"
       let response = try await request("\(BackendEnvironment.site)/api/session-history/\(endpoint)",
         credential: credential, body: intent, transport: transport, timeout: 10)

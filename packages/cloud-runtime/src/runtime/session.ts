@@ -22,6 +22,7 @@ import type { HistoryProofBroker, RoostWindow } from './roost-history';
 import {
   createUpstreamRoostHistory,
   roostStorageAccount,
+  type MobileRoostCloudHistory,
 } from './upstream-roost-history';
 import {
   buildPendingUserHistoryEntry,
@@ -69,6 +70,7 @@ export type SessionTarget =
   | { backend: 'loro' }
   | {
       backend: 'roost';
+      cloud?: MobileRoostCloudHistory;
       accountId?: string | null;
       machineId: string;
       incremental: boolean;
@@ -1361,7 +1363,7 @@ export async function openSession(
       if (sessions.get(id) !== state) return;
       state.target = target;
       if (target.backend === 'roost') {
-        const liveHistory = target.live;
+        const liveHistory = target.cloud !== undefined || target.live;
         let ownerCheckpoint: string | undefined;
         const confirmHistory = () => {
           if (
@@ -1376,6 +1378,7 @@ export async function openSession(
           event(state.ready ? 'live' : 'syncing');
         };
         const reader = createUpstreamRoostHistory({
+          cloud: target.cloud,
           accountId: target.accountId,
           workspaceId: workspace,
           machineId: target.machineId,
