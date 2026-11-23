@@ -67,6 +67,18 @@ while the subscription reconnects. Sending
 also requires the session's history metadata. These commands keep their existing
 owner checks. The host displays the sync status independently of command readiness.
 
+`live` also means the receive state is confirmed. On foreground wake every
+retained session, including offscreen ones, discards responses to reads started
+before the wake and stays `syncing` until a non-long-poll control read started
+after the wake reaches the tail. A Roost session with a history subscription also
+renews its lease and waits for the new lease to publish the installed checkpoint;
+mobile code does this without changing the vendored reader. Received Loro
+updates that wait for a missing dependency keep the session `syncing`; the
+runtime compares the import's pending spans with the oplog version instead of
+exporting pending updates. After three tail reads that still leave them pending,
+it re-bootstraps once; if they remain pending after three more, the session
+goes offline with `pending_dependencies`, and an explicit reconnect is needed.
+
 The iOS runtime package holds the authoring source in `vendor/upstream-roost`.
 The iOS asset build verifies the generated `src/runtime/upstream-roost.js` against
 that source. Android's runtime snapshot carries the verified module and licenses.

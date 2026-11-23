@@ -102,6 +102,14 @@ type SessionState = {
   historyReadable?: boolean;
   historySubscriptionFailure?: string;
   streamReady?: boolean;
+  /** Replaced on every foreground wake; reads started under an older one are discarded. */
+  streamWake?: AbortController;
+  /** Confirmation needs a control-stream read that started after the last wake. */
+  needsFreshStreamRead?: boolean;
+  /** Received Loro updates still wait for missing causal dependencies. */
+  streamApplyPending?: boolean;
+  /** Roost: drop the owner confirmation and renew the history subscription. */
+  revalidateHistory?: () => void;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
   roostMetadata?: Record<string, unknown>[];
@@ -160,6 +168,8 @@ const readLimit: Record<ReadStage, number> = {
   poll: 35_000,
 };
 const stallGrace = 15_000;
+/** Tail reads that may leave updates waiting on a dependency before recovery. */
+const PENDING_TAIL_READS = 3;
 let active: SessionState | undefined;
 // Working sessions use visit order; idle visits never enter the background LRU.
 const sessions = new Map<string, SessionState>();
@@ -397,10 +407,33 @@ export function startAcceptedInputs(options: {
 export function resumeAcceptedInputs() {
   void acceptedInputs?.resume().catch(() => {});
 }
+/**
+ * Foreground wake: every retained session, not only the visible one, drops its
+ * receive confirmation until a read started after this wake reaches the tail.
+ */
 export function resumeSessions() {
+  for (const state of sessions.values()) revalidateReceive(state);
   wakeSessionReads();
   for (const state of sessions.values()) state.roostReader?.wake();
 }
+function revalidateReceive(state: SessionState) {
+  if (
+    !state.streamWake ||
+    state.status === 'offline' ||
+    state.controller.signal.aborted
+  )
+    return;
+  state.streamWake.abort();
+  state.streamWake = new AbortController();
+  state.needsFreshStreamRead = true;
+  state.revalidateHistory?.();
+  scheduleEmit(state, receiveStatus(state));
+}
+/** `live` requires readiness and a receive state confirmed since the last wake. */
+const receiveStatus = (state: SessionState) =>
+  state.ready && !state.needsFreshStreamRead && !state.streamApplyPending
+    ? 'live'
+    : 'syncing';
 export async function stopAcceptedInputs() {
   const owner = acceptedInputs;
   acceptedInputs = undefined;
@@ -1265,29 +1298,48 @@ export async function openSession(
   event('syncing');
   void (async () => {
     try {
-      const data = await retrySessionRead(
-        controller.signal,
-        () =>
-          readAttempt(state, 'bootstrap', async () => {
-            state.client = await clientFor(`${workspace}:s:${id}`, () =>
-              sessionGrant(state),
-            );
-            controller.signal.throwIfAborted();
-            const initial = await state.client.bootstrap({
-              signal: controller.signal,
-            });
-            if (!initial.ok) throw new Error(initial.result.code);
-            return initial.result;
-          }),
-        retryStream,
-      );
+      const bootstrap = () =>
+        retrySessionRead(
+          controller.signal,
+          () =>
+            readAttempt(state, 'bootstrap', async () => {
+              state.client = await clientFor(`${workspace}:s:${id}`, () =>
+                sessionGrant(state),
+              );
+              controller.signal.throwIfAborted();
+              const initial = await state.client.bootstrap({
+                signal: controller.signal,
+              });
+              if (!initial.ok) throw new Error(initial.result.code);
+              return initial.result;
+            }),
+          retryStream,
+        );
+      const data = await bootstrap();
       if (sessions.get(id) !== state) return;
       let size = 0;
+      // Highest pending counter per peer. Checking the oplog version against it
+      // avoids exporting pending updates on every received frame.
+      const pendingEnds = new Map<string, number>();
       const consume = (bytes: Uint8Array, snapshot = false) => {
         size += bytes.length;
         if (size > 32 * 1024 * 1024) throw new Error('session_limit');
-        if (snapshot) state.doc.import(unpack(bytes));
-        else importUpdates(state.doc, bytes);
+        const statuses = snapshot
+          ? [state.doc.import(unpack(bytes))]
+          : decodeFrames(bytes).map((frame) => state.doc.import(frame));
+        for (const { pending } of statuses)
+          for (const [peer, span] of pending ?? [])
+            pendingEnds.set(
+              peer,
+              Math.max(pendingEnds.get(peer) ?? 0, span.end),
+            );
+        if (pendingEnds.size) {
+          const version = state.doc.oplogVersion();
+          for (const [peer, end] of pendingEnds)
+            if ((version.get(peer as `${number}`) ?? 0) >= end)
+              pendingEnds.delete(peer);
+        }
+        state.streamApplyPending = pendingEnds.size > 0;
         state.roostReader?.wake();
       };
       if (data.snapshotOffset !== '-1' && data.snapshot)
@@ -1360,6 +1412,7 @@ export async function openSession(
       if (!target) throw new Error('metadata_not_ready');
       if (sessions.get(id) !== state) return;
       state.target = target;
+      state.streamWake = new AbortController();
       if (target.backend === 'roost') {
         const liveHistory = target.live;
         let ownerCheckpoint: string | undefined;
@@ -1373,7 +1426,7 @@ export async function openSession(
             state.historySubscriptionFailure = undefined;
           }
           updateReadiness();
-          event(state.ready ? 'live' : 'syncing');
+          event(receiveStatus(state));
         };
         const reader = createUpstreamRoostHistory({
           accountId: target.accountId,
@@ -1407,6 +1460,17 @@ export async function openSession(
           },
         });
         state.roostReader = reader;
+        // A checkpoint from before the wake may describe an owner state that has
+        // since advanced. A subscription opened after the wake must publish the
+        // installed checkpoint again. Owners without subscriptions keep their
+        // existing confirmation.
+        if (liveHistory)
+          state.revalidateHistory = () => {
+            ownerCheckpoint = undefined;
+            state.historyReady = false;
+            updateReadiness();
+            reader.renewSubscription();
+          };
         let window = await retrySessionRead(
           controller.signal,
           () => reader.latest(),
@@ -1512,12 +1576,15 @@ export async function openSession(
       }
       pages = 0;
       let changed = true;
+      // Tail reads that still left updates waiting for dependencies, and whether
+      // this open has already re-bootstrapped to recover them.
+      let pendingTailReads = 0;
+      let rebootstrapped = false;
       while (!controller.signal.aborted) {
         if (upToDate) {
           state.streamReady = true;
           updateReadiness();
-          if (changed || state.status !== 'live')
-            event(state.ready ? 'live' : 'syncing');
+          if (changed || state.status !== 'live') event(receiveStatus(state));
           changed = false;
           pages = 0;
         } else {
@@ -1525,23 +1592,47 @@ export async function openSession(
           if (++pages > 100) throw new Error('session_limit');
         }
         let livePoll = false;
+        let wake = state.streamWake!;
         const next = await retrySessionRead(
           controller.signal,
-          () =>
-            readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
-              livePoll = upToDate && state.streamReady === true;
-              const result = await state.client.readOnce({
-                offset,
-                cursor,
-                signal: controller.signal,
-                ...(livePoll ? { live: 'long-poll' as const } : {}),
-              });
-              if (!result.ok) throw new Error(result.result.code);
-              return result;
-            }),
+          () => {
+            wake = state.streamWake!;
+            return readAttempt(
+              state,
+              upToDate ? 'poll' : 'catchup',
+              async () => {
+                // A wake check reads without long-poll so it returns at the tail.
+                livePoll =
+                  upToDate &&
+                  state.streamReady === true &&
+                  !state.needsFreshStreamRead;
+                let result;
+                try {
+                  result = await state.client.readOnce({
+                    offset,
+                    cursor,
+                    signal: AbortSignal.any([controller.signal, wake.signal]),
+                    ...(livePoll ? { live: 'long-poll' as const } : {}),
+                  });
+                } catch (error) {
+                  if (wake.signal.aborted) return undefined;
+                  throw error;
+                }
+                // Responses to reads started before the latest wake are fenced.
+                if (wake.signal.aborted) return undefined;
+                if (!result.ok) throw new Error(result.result.code);
+                return result;
+              },
+            );
+          },
           retryStream,
         );
         if (sessions.get(id) !== state) return;
+        if (!next) continue;
+        if (next.result.upToDate && state.needsFreshStreamRead) {
+          state.needsFreshStreamRead = false;
+          changed = true;
+        }
         if (next.result.payload) {
           consume(next.result.payload.body);
           changed = true;
@@ -1552,8 +1643,44 @@ export async function openSession(
         cursor = next.result.cursor;
         upToDate = next.result.upToDate;
         if (next.result.closed) throw new Error('stream_closed');
+        if (upToDate && state.streamApplyPending) {
+          // The tail no longer supplies the missing dependency. Re-bootstrap
+          // once; if that cannot apply it either, end with an explicit failure
+          // instead of syncing indefinitely.
+          if (++pendingTailReads >= PENDING_TAIL_READS) {
+            if (rebootstrapped) throw new Error('pending_dependencies');
+            rebootstrapped = true;
+            pendingTailReads = 0;
+            trace(state, 'retry', {
+              stage: 'bootstrap',
+              code: 'pending_dependencies',
+            });
+            const fresh = await bootstrap();
+            if (sessions.get(id) !== state) return;
+            size = 0;
+            if (fresh.snapshotOffset !== '-1' && fresh.snapshot)
+              consume(fresh.snapshot.body, true);
+            for (const part of fresh.updates) consume(part.body);
+            offset = fresh.nextOffset;
+            cursor = fresh.cursor;
+            upToDate = fresh.upToDate;
+            changed = true;
+            continue;
+          }
+        } else {
+          pendingTailReads = 0;
+          rebootstrapped = false;
+        }
         if (livePoll && !next.result.payload?.body.length && upToDate)
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(timer);
+              wake.signal.removeEventListener('abort', done);
+              resolve();
+            };
+            const timer = setTimeout(done, 1000);
+            wake.signal.addEventListener('abort', done, { once: true });
+          });
       }
     } catch (error) {
       const failed = error instanceof Error ? error : new Error('sync_failed');
@@ -2134,7 +2261,7 @@ export async function sendTurn(
       : undefined;
     await state.markDispatch(state.id, id);
     if (sessions.get(state.id) !== state) throw new Error('runtime_replaced');
-    scheduleEmit(state, 'live');
+    scheduleEmit(state, receiveStatus(state));
     const replyTo = `${state.workspace}:rpc:res:${args.machineId}:${crypto.randomUUID()}`;
     const responseClient = await clientFor(replyTo, () => sessionGrant(state));
     const created = await responseClient.create({
@@ -2950,7 +3077,7 @@ export async function respondPermission(args: {
     throw new Error('upload_failed');
   }
   state.unsent.delete(key);
-  if (active === state) scheduleEmit(state, 'live');
+  if (active === state) scheduleEmit(state, receiveStatus(state));
   return { state: 'accepted' as const };
 }
 
@@ -3073,5 +3200,5 @@ export async function writeNoticeMeta(
   });
   if (!result.ok) throw new Error('upload_failed');
   state.unsent.delete(key);
-  if (active === state) scheduleEmit(state, 'live');
+  if (active === state) scheduleEmit(state, receiveStatus(state));
 }

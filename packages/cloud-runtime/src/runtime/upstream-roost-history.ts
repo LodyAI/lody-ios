@@ -26,6 +26,8 @@ type RoostSessionOptions = Parameters<typeof createRoostHistoryTransport>[0] & {
 export function createMobileRoostSessionData(
   options: RoostSessionOptions,
   subscribeWake?: (wake: () => void) => () => void,
+  /** The current renewal signal; aborting it ends the open subscription lease. */
+  renewal?: () => AbortSignal,
 ) {
   const transport = createRoostHistoryTransport(options);
   return createRemoteRoostSessionDataFactory({
@@ -37,19 +39,25 @@ export function createMobileRoostSessionData(
     subscribeWake,
     subscribeHistory: async (_machineId, _sessionId, open, publish, signal) => {
       let published = false;
+      const renewed = renewal?.();
       try {
         await transport.subscribe(
           open,
           (publication) => {
+            // A publication from a lease renewed by a foreground wake may
+            // predate the wake, so it cannot confirm the current history.
+            if (renewed?.aborted) return;
             published = true;
             publish(publication);
             options.onSubscription?.({ checkpoint: publication.checkpoint });
           },
-          signal,
+          renewed ? AbortSignal.any([signal, renewed]) : signal,
         );
-        if (!published && !signal.aborted)
+        if (!published && !signal.aborted && !renewed?.aborted)
           throw new Error('history_subscription_unavailable');
       } catch (error) {
+        // The reader opens the next lease; a renewal is not a failure.
+        if (renewed?.aborted && !signal.aborted) return;
         if (!signal.aborted && !options.signal.aborted)
           options.onSubscription?.({
             reason:
@@ -70,12 +78,17 @@ export function createMobileRoostSessionData(
 /** Observe the upstream history in the native transcript's window format. */
 export function createUpstreamRoostHistory(options: RoostSessionOptions) {
   let wake: (() => void) | undefined;
-  const data = createMobileRoostSessionData(options, (next) => {
-    wake = next;
-    return () => {
-      wake = undefined;
-    };
-  });
+  let renewal = new AbortController();
+  const data = createMobileRoostSessionData(
+    options,
+    (next) => {
+      wake = next;
+      return () => {
+        wake = undefined;
+      };
+    },
+    () => renewal.signal,
+  );
   let generation = 0;
   let consumed = 0;
   const changes: unknown[] = [];
@@ -128,6 +141,12 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
   return {
     sessionData: data,
     wake() {
+      wake?.();
+    },
+    /** End the current subscription lease so the reader opens a fresh one. */
+    renewSubscription() {
+      renewal.abort();
+      renewal = new AbortController();
       wake?.();
     },
     metadataChanged(metadata: readonly Record<string, unknown>[] | undefined) {
