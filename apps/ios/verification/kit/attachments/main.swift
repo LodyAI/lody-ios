@@ -8,6 +8,7 @@ final class UploadRecorder: @unchecked Sendable {
   private let lock = NSLock()
   private var storedRequests: [URLRequest] = []
   private var storedFailPart = false
+  private var storedTransientFailuresRemaining = 0
   private var storedImageParts: [(String, Data)] = []
   private var storedProgress: [(String, String, Int?)] = []
   private var storedBytes: [Int64] = []
@@ -35,6 +36,15 @@ final class UploadRecorder: @unchecked Sendable {
     get { lock.lock(); defer { lock.unlock() }; return storedFailPart }
     set { lock.lock(); storedFailPart = newValue; lock.unlock() }
   }
+  func takeTransientFailure() -> Bool {
+    lock.lock(); defer { lock.unlock() }
+    guard storedTransientFailuresRemaining > 0 else { return false }
+    storedTransientFailuresRemaining -= 1
+    return true
+  }
+  func setTransientFailures(_ count: Int) {
+    lock.lock(); storedTransientFailuresRemaining = count; lock.unlock()
+  }
 }
 
 final class UploadProtocol: URLProtocol {
@@ -47,6 +57,7 @@ final class UploadProtocol: URLProtocol {
     get { recorder.failPart }
     set { recorder.failPart = newValue }
   }
+  static func setTransientFailures(_ count: Int) { recorder.setTransientFailures(count) }
   static var imageParts: [(String, Data)] {
     get { recorder.imageParts }
     set { recorder.imageParts = newValue }
@@ -128,6 +139,12 @@ final class UploadProtocol: URLProtocol {
       }
     }
     let path = request.url!.path
+    if Self.recorder.takeTransientFailure() {
+      client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: Data(#"{"code":"service_unavailable"}"#.utf8))
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
     var body: [String: Any] = [:]
     var status = 200
     if path.contains("session-images") {
@@ -277,9 +294,10 @@ final class UploadProtocol: URLProtocol {
     UploadProtocol.failPart = true
     let failedProgress = UploadRecorder()
     do {
-      _ = try await SessionAttachments.upload([attachment(file)], workspace: "w1", session: "s1", pins: pins, onProgress: failedProgress.record)
+      _ = try await SessionAttachments.upload([attachment(file)], workspace: "w1", session: "s1", pins: pins, retry: .init(maxAttempts: 3, sleep: { _ in }), onProgress: failedProgress.record)
       fatalError("Failed upload must not produce an attachment")
     } catch { assert(UploadProtocol.requests.last!.url!.lastPathComponent == "abort") }
+    UploadProtocol.failPart = false
     assert(!failedProgress.progress.contains { $0.1 == "complete" }, "A failed upload must never report completion")
     func diagnostics() throws -> (String, [[String: Any]]) {
       // Reopen the real on-disk store, then use the same export as Settings.
@@ -388,7 +406,44 @@ final class UploadProtocol: URLProtocol {
     do {
       _ = try await SessionAttachments.upload([attachment(URL(fileURLWithPath: "/etc/passwd"))], workspace: "w1", session: "s1", pins: pins)
       fatalError("Must reject files outside picker storage")
-    } catch { assert(UploadProtocol.requests.count == before) }
+    } catch {
+      assert(error.localizedDescription == String(localized: "native.attachment.error.invalid", bundle: .lody))
+      assert(UploadProtocol.requests.count == before)
+    }
+    let symlink = root.appendingPathComponent("passwd-link")
+    try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: URL(fileURLWithPath: "/etc/passwd"))
+    do {
+      _ = try await SessionAttachments.upload([attachment(symlink)], workspace: "w1", session: "s1", pins: pins)
+      fatalError("Must reject symlink escapes inside picker storage")
+    } catch {
+      assert(error.localizedDescription == String(localized: "native.attachment.error.invalid", bundle: .lody))
+      assert(UploadProtocol.requests.count == before)
+    }
+    let privateMissing = URL(fileURLWithPath: "/private" + root.path).appendingPathComponent("purged.jpg")
+    do {
+      _ = try await SessionAttachments.upload([attachment(privateMissing, "image")], workspace: "w1", session: "s1", pins: pins)
+      fatalError("Must reject missing local attachment copy")
+    } catch {
+      assert(error.localizedDescription == String(localized: "native.attachment.error.missing", bundle: .lody))
+      assert(UploadProtocol.requests.count == before)
+    }
+    var reusedItem = attachment(privateMissing, "image")
+    reusedItem["uploadedBlock"] = ["type": "image", "imageId": "already-uploaded", "mimeType": "image/jpeg", "sizeBytes": 42]
+    let reusedProgress = UploadRecorder()
+    let reusedBlocks = try await SessionAttachments.upload([reusedItem], workspace: "w1", session: "s1", pins: pins, onProgress: reusedProgress.record)
+    assert(reusedBlocks.count == 1 && reusedBlocks[0]["imageId"] as? String == "already-uploaded")
+    assert(UploadProtocol.requests.count == before, "Reused uploaded blocks must not hit the network or require local bytes")
+    assert(reusedProgress.progress.last?.1 == "complete" && reusedProgress.progress.last?.2 == 100)
+    try Data("hi!".utf8).write(to: file)
+    UploadProtocol.requests = []
+    UploadProtocol.setTransientFailures(2)
+    let retryRecorder = UploadRecorder()
+    let retriedBlocks = try await SessionAttachments.upload([attachment(file)], workspace: "w1", session: "s1", pins: pins, retry: .init(maxAttempts: 3, sleep: { _ in }), onUploaded: { id, _ in
+      retryRecorder.record(id, "uploaded", nil)
+    })
+    assert(retriedBlocks.first?["fileId"] as? String == "file1" && UploadProtocol.requests.count == 3,
+      "Transient 5xx failures during attachment upload must retry automatically before succeeding")
+    assert(retryRecorder.progress.map(\.0) == ["test.txt"])
     let downloadDirectory = root.appendingPathComponent("download")
     let downloaded = try await SessionAttachments.download(workspace: "w /1", session: "source", fileId: "f /1",
       fileName: "../../report.txt", sizeBytes: 3, directory: downloadDirectory)

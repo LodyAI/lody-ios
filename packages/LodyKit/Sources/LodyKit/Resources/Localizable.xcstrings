@@ -9740,6 +9740,23 @@
         }
       }
     },
+    "native.attachment.error.missing": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地附件已被系统清理，请重新选择"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local attachment copy is no longer available. Choose it again."
+          }
+        }
+      }
+    },
     "native.attachment.error.empty": {
       "extractionState": "manual",
       "localizations": {

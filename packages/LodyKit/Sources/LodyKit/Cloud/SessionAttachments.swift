@@ -34,6 +34,98 @@ final class AttachmentDownloadBatch {
 /// Upload bytes in native code; only the server's attachment references enter Streams.
 enum SessionAttachments {
   typealias ProgressHandler = @Sendable (_ attachmentID: String, _ phase: String, _ percent: Int?) -> Void
+  typealias UploadedHandler = @Sendable (_ attachmentID: String, _ block: [String: Any]) -> Void
+  typealias SleepHandler = @Sendable (UInt64) async throws -> Void
+
+  struct RetryPolicy: Sendable {
+    var maxAttempts: Int
+    var sleep: SleepHandler?
+
+    init(maxAttempts: Int, sleep: SleepHandler? = nil) {
+      self.maxAttempts = maxAttempts
+      self.sleep = sleep
+    }
+
+    static let single = RetryPolicy(maxAttempts: 1)
+    static let upload = RetryPolicy(maxAttempts: 3)
+  }
+
+  static var outboxDirectory: URL {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("Lody\(BackendEnvironment.storageSuffix)/OutboxAttachments", isDirectory: true)
+  }
+
+  private static func canonicalPath(_ url: URL) -> String {
+    var current = url.standardizedFileURL
+    var suffix: [String] = []
+    while !FileManager.default.fileExists(atPath: current.path) {
+      let name = current.lastPathComponent
+      let parent = current.deletingLastPathComponent()
+      if parent.path == current.path || name.isEmpty { break }
+      suffix.append(name)
+      current = parent
+    }
+    var resolved = current.resolvingSymlinksInPath()
+    for component in suffix.reversed() {
+      resolved.appendPathComponent(component)
+    }
+    let path = resolved.path
+    if path == "/private/var" { return "/var" }
+    if path.hasPrefix("/private/var/") { return String(path.dropFirst("/private".count)) }
+    if path == "/private/tmp" { return "/tmp" }
+    if path.hasPrefix("/private/tmp/") { return String(path.dropFirst("/private".count)) }
+    return path
+  }
+
+  static func isAllowedFile(_ url: URL, roots: [URL]? = nil) -> Bool {
+    guard url.isFileURL, !url.hasDirectoryPath, !url.path.isEmpty else { return false }
+    guard !url.path.split(separator: "/").contains("..") else { return false }
+    if (try? FileManager.default.attributesOfItem(atPath: url.path))?[FileAttributeKey.type] as? FileAttributeType == .typeSymbolicLink {
+      return false
+    }
+    let resolved = canonicalPath(url)
+    let allowed = roots ?? [FileManager.default.temporaryDirectory, outboxDirectory]
+    return allowed.contains { resolved.hasPrefix(canonicalPath($0) + "/") }
+  }
+
+  private static func validUploadedBlock(_ raw: Any?) -> [String: Any]? {
+    guard let block = raw as? [String: Any],
+          let kind = block["type"] as? String, ["image", "file"].contains(kind),
+          let id = block[kind == "image" ? "imageId" : "fileId"] as? String, !id.isEmpty,
+          block["mimeType"] is String,
+          let bytes = block["sizeBytes"] as? Int, bytes > 0 else { return nil }
+    if kind == "file" {
+      guard block["transport"] as? String == "r2",
+            block["sha256"] is String,
+            block["fileName"] is String,
+            block["textPreview"] is Bool,
+            block["uploadedAt"] as? NSNumber != nil else { return nil }
+    }
+    return block
+  }
+
+  private static func isRetryableUploadFailure(_ failure: NSError) -> Bool {
+    if failure.domain == NSURLErrorDomain {
+      let retryableCodes: Set<Int> = [
+        NSURLErrorTimedOut,
+        NSURLErrorNetworkConnectionLost,
+        NSURLErrorNotConnectedToInternet,
+        NSURLErrorCannotFindHost,
+        NSURLErrorCannotConnectToHost,
+        NSURLErrorDNSLookupFailed,
+        NSURLErrorResourceUnavailable,
+        NSURLErrorInternationalRoamingOff,
+        NSURLErrorCallIsActive,
+        NSURLErrorDataNotAllowed,
+      ]
+      return retryableCodes.contains(failure.code)
+    }
+    if failure.domain == "SessionAttachments" {
+      return [408, 429, 500, 502, 503, 504].contains(failure.code)
+    }
+    return false
+  }
+
   static func error(_ message: String) -> NSError {
     NSError(domain: "SessionAttachments", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
   }
@@ -60,24 +152,41 @@ enum SessionAttachments {
     return components.url!
   }
   static func upload(_ attachments: [[String: Any]], workspace: String, session: String, pins: WorkspaceModePins = .shared,
-    onProgress: @escaping ProgressHandler = { _, _, _ in }) async throws -> [[String: Any]] {
+    allowedRoots: [URL]? = nil, retry: RetryPolicy = .upload,
+    onProgress: @escaping ProgressHandler = { _, _, _ in },
+    onUploaded: UploadedHandler? = nil) async throws -> [[String: Any]] {
     try pins.requirePlaintext(workspace)
     guard attachments.count <= 16,
           attachments.filter({ $0["kind"] as? String == "image" }).count <= 8,
           attachments.filter({ $0["kind"] as? String == "file" }).count <= 8 else {
       throw error(String(localized: "native.attachment.error.limit", bundle: .lody))
     }
-    guard let token = try AuthKeychain.read() else { throw error(String(localized: "native.attachment.error.signIn", bundle: .lody)) }
     var blocks: [[String: Any]] = []
+    var token: String?
     for attachment in attachments {
       try Task.checkCancellation()
-      guard let uri = attachment["uri"] as? String, let url = URL(string: uri), url.isFileURL,
-            url.resolvingSymlinksInPath().path.hasPrefix(FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"),
+      let attachmentID = attachment["id"] as? String ?? ""
+      if let reused = validUploadedBlock(attachment["uploadedBlock"]) {
+        blocks.append(reused)
+        onProgress(attachmentID, "complete", 100)
+        continue
+      }
+      if token == nil {
+        guard let loaded = try AuthKeychain.read() else {
+          throw error(String(localized: "native.attachment.error.signIn", bundle: .lody))
+        }
+        token = loaded
+      }
+      let bearer = token!
+      guard let uri = attachment["uri"] as? String, let url = URL(string: uri),
+            isAllowedFile(url, roots: allowedRoots),
             let name = attachment["name"] as? String, !name.isEmpty,
             var kind = attachment["kind"] as? String, ["image", "file"].contains(kind) else {
         throw error(String(localized: "native.attachment.error.invalid", bundle: .lody))
       }
-      let attachmentID = attachment["id"] as? String ?? ""
+      guard FileManager.default.fileExists(atPath: url.path) else {
+        throw error(String(localized: "native.attachment.error.missing", bundle: .lody))
+      }
       let attempt = UUID()
       onProgress(attachmentID, "preparing", nil)
       let report: @Sendable (Int64, Int64) -> Void = { sent, total in
@@ -137,7 +246,7 @@ enum SessionAttachments {
         let safeName = fileName.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(of: "\r", with: "_").replacingOccurrences(of: "\n", with: "_")
         var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"sessionId\"\r\n\r\n\(session)\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(contentType)\r\n\r\n".utf8)
         body.append(bytes); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-        result = try await request(base + "/upload", workspace: workspace, pins: pins, token: token, stage: responseStage, attempt: attempt, headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"], body: body, onProgress: report)
+        result = try await request(base + "/upload", workspace: workspace, pins: pins, token: bearer, stage: responseStage, attempt: attempt, headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"], body: body, retry: retry, onProgress: report)
       } else {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
@@ -154,9 +263,9 @@ enum SessionAttachments {
           "x-file-size-bytes": String(count), "x-file-text-preview": String(!prefix.contains(0) && String(data: prefix, encoding: .utf8) != nil)]
         let partSize = 16 * 1024 * 1024
         if count <= partSize {
-          result = try await request(base + "/upload", workspace: workspace, pins: pins, token: token, stage: responseStage, attempt: attempt, headers: headers, body: try file.readToEnd(), onProgress: report)
+          result = try await request(base + "/upload", workspace: workspace, pins: pins, token: bearer, stage: responseStage, attempt: attempt, headers: headers, body: try file.readToEnd(), retry: retry, onProgress: report)
         } else {
-          let created = try await request(base + "/multipart/create", workspace: workspace, pins: pins, token: token, stage: "multipart_create", attempt: attempt, headers: headers)
+          let created = try await request(base + "/multipart/create", workspace: workspace, pins: pins, token: bearer, stage: "multipart_create", attempt: attempt, headers: headers, retry: retry)
           guard let uploadId = created["uploadId"] as? String, !uploadId.isEmpty,
                 let fileId = created["fileId"] as? String, !fileId.isEmpty else { throw invalidResponse(stage: "multipart_create", attempt: attempt) }
           let path = base + "/multipart/" + segment(uploadId)
@@ -166,17 +275,18 @@ enum SessionAttachments {
             while let data = try file.read(upToCount: partSize), !data.isEmpty {
               let number = parts.count + 1
               let offset = Int64(parts.count * partSize)
-              let part = try await request(path + "/part/\(number)", workspace: workspace, pins: pins, token: token, stage: "multipart_part", attempt: attempt, method: "PUT", headers: identity.merging(["x-file-part-size-bytes": String(data.count)], uniquingKeysWith: { _, new in new }), body: data,
+              let part = try await request(path + "/part/\(number)", workspace: workspace, pins: pins, token: bearer, stage: "multipart_part", attempt: attempt, method: "PUT", headers: identity.merging(["x-file-part-size-bytes": String(data.count)], uniquingKeysWith: { _, new in new }), body: data,
+                retry: retry,
                 onProgress: { sent, _ in report(offset + sent, Int64(count)) })
               guard let etag = part["etag"] as? String, !etag.isEmpty else { throw invalidResponse(stage: "multipart_part", attempt: attempt) }
               parts.append(["partNumber": number, "etag": etag])
               report(offset + Int64(data.count), Int64(count))
             }
             responseStage = "multipart_complete"
-            result = try await request(path + "/complete", workspace: workspace, pins: pins, token: token, stage: responseStage, attempt: attempt, headers: identity.merging(["Content-Type": "application/json"], uniquingKeysWith: { _, new in new }), body: JSONSerialization.data(withJSONObject: ["parts": parts]))
+            result = try await request(path + "/complete", workspace: workspace, pins: pins, token: bearer, stage: responseStage, attempt: attempt, headers: identity.merging(["Content-Type": "application/json"], uniquingKeysWith: { _, new in new }), body: JSONSerialization.data(withJSONObject: ["parts": parts]), retry: retry)
           } catch {
             // Cleanup also runs after cancellation; never retry message dispatch.
-            await Task.detached { _ = try? await request(path + "/abort", workspace: workspace, pins: pins, token: token, stage: "multipart_abort", attempt: attempt, method: "DELETE", headers: identity) }.value
+            await Task.detached { _ = try? await request(path + "/abort", workspace: workspace, pins: pins, token: bearer, stage: "multipart_abort", attempt: attempt, method: "DELETE", headers: identity) }.value
             throw error
           }
         }
@@ -187,6 +297,7 @@ enum SessionAttachments {
         throw invalidResponse(stage: responseStage, attempt: attempt)
       }
       blocks.append(block)
+      onUploaded?(attachmentID, block)
       onProgress(attachmentID, "complete", 100)
     }
     return blocks
@@ -267,6 +378,34 @@ enum SessionAttachments {
   }
 
   static func request(_ url: String, workspace: String? = nil, pins: WorkspaceModePins = .shared, token: String, stage: StaticString, attempt: UUID, method: String = "POST", headers: [String: String], body: Data? = nil,
+    retry: RetryPolicy = .single,
+    onProgress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> [String: Any] {
+    let totalAttempts = max(1, retry.maxAttempts)
+    let backoffs: [UInt64] = [350_000_000, 1_000_000_000]
+    var index = 0
+    while true {
+      try Task.checkCancellation()
+      do {
+        return try await requestOnce(
+          url, workspace: workspace, pins: pins, token: token, stage: stage, attempt: attempt,
+          method: method, headers: headers, body: body, onProgress: onProgress
+        )
+      } catch let failure as NSError {
+        index += 1
+        guard index < totalAttempts, !Task.isCancelled, isRetryableUploadFailure(failure) else {
+          throw failure
+        }
+        let delay = backoffs[min(index - 1, backoffs.count - 1)]
+        if let sleep = retry.sleep {
+          try await sleep(delay)
+        } else {
+          try await Task.sleep(nanoseconds: delay)
+        }
+      }
+    }
+  }
+
+  private static func requestOnce(_ url: String, workspace: String?, pins: WorkspaceModePins, token: String, stage: StaticString, attempt: UUID, method: String, headers: [String: String], body: Data?,
     onProgress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> [String: Any] {
     try Task.checkCancellation()
     if let workspace, stage.description != "multipart_abort" { try pins.requirePlaintext(workspace) }

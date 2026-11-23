@@ -105,8 +105,11 @@ extension DataRuntime {
     guard health.ready, let workspace,
           let target = args["sessionId"] as? String, !target.isEmpty,
           attachmentTasks[target] == nil else {
-      sink.resolve(notSentJSON("native.runtime.sessionNotReady")); return
+      if edit { sink.resolve(notSentJSON("native.runtime.sessionNotReady")) }
+      else { sink.resolve(#"{"state":"not_sent","reason":"session_not_ready"}"#) }
+      return
     }
+    let user = userId
     if !backgrounded {
       args["backgroundTaskId"] = SessionBackgroundTasks.shared.begin(owner: owner)
     }
@@ -119,7 +122,7 @@ extension DataRuntime {
     attachmentAttempts[target] = attempt
     attachmentTasks[target] = Task.detached { [weak self] in
       do {
-        args["attachmentBlocks"] = try await SessionAttachments.upload(attachments, workspace: workspace, session: target) { [weak self] attachmentID, phase, percent in
+        args["attachmentBlocks"] = try await SessionAttachments.upload(attachments, workspace: workspace, session: target, onProgress: { [weak self] attachmentID, phase, percent in
           DispatchQueue.main.async { [weak self] in
             guard let self, self.generation == generation, self.workspace == workspace,
               self.attachmentAttempts[target] == attempt, self.attachmentTasks[target] != nil else { return }
@@ -128,7 +131,18 @@ extension DataRuntime {
             if let percent { event["percent"] = percent }
             NotificationCenter.default.post(name: .lodyAttachmentUploadProgress, object: nil, userInfo: event)
           }
-        }
+        }, onUploaded: { [weak self] attachmentID, block in
+          guard !edit, let blockData = try? JSONSerialization.data(withJSONObject: block) else { return }
+          DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+              guard let self, self.generation == generation, self.workspace == workspace, self.userId == user,
+                    let decoded = (try? JSONSerialization.jsonObject(with: blockData)) as? [String: Any] else { return }
+              OutboxSession.shared.recordUploadedAttachment(
+                user: user, workspace: workspace, sessionId: target, sendId: sendID, attachmentId: attachmentID, block: decoded
+              )
+            }
+          }
+        })
         try Task.checkCancellation()
         let prepared = String(data: try JSONSerialization.data(withJSONObject: args), encoding: .utf8)!
         await MainActor.run { [weak self] in

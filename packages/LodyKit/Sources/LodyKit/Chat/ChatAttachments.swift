@@ -27,19 +27,30 @@ struct ChatAttachment: Equatable {
     return UIImage(cgImage: image)
   }
 
+  static func safeFileName(_ raw: String?, fallback: String = "attachment") -> String {
+    guard let raw else { return fallback }
+    let normalized = raw.replacingOccurrences(of: "\\", with: "/")
+      .replacingOccurrences(of: "\r", with: "_")
+      .replacingOccurrences(of: "\n", with: "_")
+      .replacingOccurrences(of: "\0", with: "")
+    let leaf = (normalized as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+    if leaf.isEmpty || leaf == "." || leaf == ".." { return fallback }
+    return leaf
+  }
+
   static func store(_ url: URL) -> URL? {
     let access = url.startAccessingSecurityScopedResource()
     defer { if access { url.stopAccessingSecurityScopedResource() } }
     var directory: ObjCBool = false
     guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), !directory.boolValue else { return nil }
     let destination = FileManager.default.temporaryDirectory
-      .appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent)
+      .appendingPathComponent(UUID().uuidString + "-" + safeFileName(url.lastPathComponent))
     return (try? FileManager.default.copyItem(at: url, to: destination)) == nil ? nil : destination
   }
 
   static func store(_ data: Data, name: String) -> URL? {
     let destination = FileManager.default.temporaryDirectory
-      .appendingPathComponent(UUID().uuidString + "-" + name)
+      .appendingPathComponent(UUID().uuidString + "-" + safeFileName(name))
     return (try? data.write(to: destination)) == nil ? nil : destination
   }
 
@@ -98,8 +109,8 @@ struct ChatAttachment: Equatable {
   static func make(suggestedName: String?, type: UTType, source: URL, id: String? = nil) -> ChatAttachment? {
     guard source.isFileURL, !isWebArchiveName(source.lastPathComponent), !isWebArchiveName(suggestedName) else { return nil }
     guard let copy = store(source) else { return nil }
-    var name = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if name.isEmpty { name = source.lastPathComponent }
+    let fallback = safeFileName(source.lastPathComponent)
+    var name = safeFileName(suggestedName, fallback: fallback)
     if URL(fileURLWithPath: name).pathExtension.isEmpty {
       let suffix = source.pathExtension.isEmpty ? (type.preferredFilenameExtension ?? "") : source.pathExtension
       if !suffix.isEmpty { name += "." + suffix }
@@ -192,7 +203,7 @@ final class ChatAttachmentPicker: NSObject, UIDocumentPickerDelegate {
   func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
     let picked = urls.compactMap { url -> ChatAttachment? in
       guard let copy = ChatAttachment.store(url) else { return nil }
-      let name = url.lastPathComponent
+      let name = ChatAttachment.safeFileName(url.lastPathComponent)
       return ChatAttachment(
         id: UUID().uuidString,
         name: name,

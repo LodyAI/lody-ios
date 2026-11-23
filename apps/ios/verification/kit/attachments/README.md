@@ -20,7 +20,12 @@ JPEG or HEIC. Supported PNG/JPEG/WebP/GIF content uploads unchanged, renamed to
 match; HEIC, other formats and oversized photos convert to JPEG at up to 2048
 pixels. The check's image route applies the same byte check as the server. Videos and other non-image types upload as files; a movie marked
 as an image is coerced onto the file route instead of extracting a still.
-Upload failure retains the pending turn for explicit retry. A definite failure
+Accepted plaintext Outbox turns stage picker files into `Application Support/Lody*/OutboxAttachments`
+and rebase container paths on restore so background `tmp` purges and app updates do
+not invalidate pending attachments, cleaning staged copies up on removal, replacement
+or logout. Pre-write attachment HTTP requests retry transient transport, 429 and 5xx
+failures with bounded backoff, and retries reuse already-uploaded attachment blocks
+without re-uploading bytes. Definite failure retains the pending turn for explicit retry and
 does not disable the composer: submitting new content replaces that pending turn
 with a fresh message and only the newly selected attachments. Unconfirmed delivery
 still blocks another submission; no message dispatch is retried automatically.

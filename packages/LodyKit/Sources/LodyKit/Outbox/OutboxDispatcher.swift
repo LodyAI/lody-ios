@@ -194,49 +194,54 @@ final class OutboxDispatcher {
     var started = false
     do {
       try await marking.value
-      let latest = store.snapshot.records.first { $0.sessionId == id }
-      guard latest?.sendId == record.sendId, latest?.phase == marked.phase else { return }
-      if let creation = record.creation {
+      guard let current = store.snapshot.records.first(where: { $0.sessionId == id }),
+            current.sendId == record.sendId, current.phase == marked.phase else { return }
+      let active = current.with(phase: record.phase)
+      if let creation = active.creation {
         started = true
         let result = try Self.parse(await services.createSession(creation))
+        let latest = store.snapshot.records.first(where: { $0.sessionId == id && $0.sendId == active.sendId })?.with(phase: record.phase) ?? active
         switch result["state"]?.string {
         case "created":
           guard let session = result["session"]?.object else { throw OutboxError.invalidRecord }
           release(id)
-          var created = record.with(phase: "waiting", dropCreation: true)
+          var created = latest.with(phase: "waiting", dropCreation: true)
           created.session = session
           try await store.put(created).value
         case "rejected":
-          await fail(record, store: store, reason: quotaError(result["reason"]?.string, fallback: "send.error.sessionNotCreated"))
+          await fail(latest, store: store, reason: quotaError(result["reason"]?.string, fallback: "send.error.sessionNotCreated"))
         default:
-          try await store.put(record.with(phase: "unknown")).value
+          try await store.put(latest.with(phase: "unknown")).value
         }
         return
       }
       do { try await services.ensureSession(id) } catch {
-        await fail(record, store: store, reason: text("native.runtime.sessionNotSyncedRetry"))
+        let latest = store.snapshot.records.first(where: { $0.sessionId == id && $0.sendId == active.sendId })?.with(phase: record.phase) ?? active
+        await fail(latest, store: store, reason: text("native.runtime.sessionNotSyncedRetry"))
         return
       }
       started = true
-      let result = try Self.parse(await services.sendSessionTurn(Self.turn(record, userId: userId, plan: plan)))
+      let result = try Self.parse(await services.sendSessionTurn(Self.turn(active, userId: userId, plan: plan)))
+      let latest = store.snapshot.records.first(where: { $0.sessionId == id && $0.sendId == active.sendId })?.with(phase: record.phase) ?? active
       let state = result["state"]?.string ?? ""
       if state == "not_sent" {
         let reason = result["reason"]?.string
         // An earlier Roost input still awaits its owner and nothing was written. Keep the send
         // pending and continue with the same identity, as Web does, instead of failing it.
         if reason == "previous_input_pending" || (plan == nil && reason == "session_not_ready") {
-          try await store.put(record.with(phase: "waiting")).value
+          try await store.put(latest.with(phase: "waiting")).value
           return
         }
-        await fail(record, store: store, reason: quotaError(reason, fallback: "send.error.notSent"))
+        await fail(latest, store: store, reason: quotaError(reason, fallback: "send.error.notSent"))
         return
       }
-      var next = record.with(phase: ["accepted", "uploaded", "queued"].contains(state) ? state : "unknown")
+      var next = latest.with(phase: ["accepted", "uploaded", "queued"].contains(state) ? state : "unknown")
       if let plan { next.send["guide"] = .bool(plan.guide) }
       try await store.put(next).value
     } catch {
-      if started { _ = await store.put(record.with(phase: "unknown")).result }
-      else { await fail(record, store: store, reason: text("send.error.draftSaveFailed")) }
+      let latest = store.snapshot.records.first(where: { $0.sessionId == id && $0.sendId == record.sendId })?.with(phase: record.phase) ?? record
+      if started { _ = await store.put(latest.with(phase: "unknown")).result }
+      else { await fail(latest, store: store, reason: text("send.error.draftSaveFailed")) }
     }
   }
 
@@ -254,6 +259,7 @@ final class OutboxDispatcher {
       "workspace_payment_required": "send.error.workspacePaymentRequired",
       "free_session_limit_reached": "send.error.freeSessionLimit",
       "free_session_turn_limit_reached": "send.error.freeTurnLimit",
+      "session_not_ready": "native.runtime.sessionNotReady",
     ]
     if let reason, let key = keys[reason] { return text(key) }
     if let reason, !reason.isEmpty { return reason }

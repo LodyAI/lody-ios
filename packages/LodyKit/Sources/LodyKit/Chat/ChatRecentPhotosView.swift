@@ -359,7 +359,7 @@ final class ChatRecentPhotosView: UIView, UICollectionViewDataSource, UICollecti
         let resources = PHAssetResource.assetResources(for: asset)
         let resource = resources.first { $0.type == .video || $0.type == .fullSizeVideo } ?? resources.first
         guard let resource else { group.leave(); return }
-        let name = resource.originalFilename
+        let name = ChatAttachment.safeFileName(resource.originalFilename, fallback: "\(UUID().uuidString).mov")
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "-" + name)
         let request = PHAssetResourceRequestOptions()
         request.isNetworkAccessAllowed = true
@@ -373,7 +373,7 @@ final class ChatRecentPhotosView: UIView, UICollectionViewDataSource, UICollecti
         }
         return
       }
-      let name = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? "\(UUID().uuidString).jpg"
+      let name = ChatAttachment.safeFileName(PHAssetResource.assetResources(for: asset).first?.originalFilename, fallback: "\(UUID().uuidString).jpg")
       self.images.requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
         defer { group.leave() }
         guard let data, let url = ChatAttachment.store(data, name: name) else { return }

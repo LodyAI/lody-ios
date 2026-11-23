@@ -37,7 +37,8 @@ extension OutboxPersistence {
           continuation.resume(with: Result { try LocalStore.shared.write(key, value, generation: generation) })
         }
       }
-    })
+    },
+    attachmentsDirectory: OutboxRecord.defaultAttachmentsDirectory)
 }
 
 @MainActor
@@ -120,6 +121,19 @@ final class OutboxSession {
   func remove(user: String, workspace: String, sessionId: String) -> Task<Void, Error> {
     guard let store = store(user: user, workspace: workspace) else { return Task { throw OutboxError.scopeExpired } }
     return store.remove(sessionId)
+  }
+
+  func recordUploadedAttachment(
+    user: String, workspace: String, sessionId: String, sendId: String, attachmentId: String, block: [String: Any]
+  ) {
+    guard WorkspaceModePins.shared.mode(workspace) == .plaintext,
+          let store = store(user: user, workspace: workspace),
+          let current = store.snapshot.records.first(where: { $0.sessionId == sessionId && $0.sendId == sendId }),
+          ["sending", "waiting", "failed"].contains(current.phase),
+          let value = SessionSender.object(block) else { return }
+    let updated = current.recordingUploadedAttachment(id: attachmentId, block: .object(value))
+    guard updated != current else { return }
+    _ = store.put(updated)
   }
 
   func debugFixture(_ action: String) -> String {
