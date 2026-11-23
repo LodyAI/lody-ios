@@ -21,7 +21,7 @@ CHAT = ROOT / 'apps/ios/verification/kit/chat'
 # Each retained scene owns its services in Swift and exercises production controllers.
 BATCHES = {
     'pages': ['onboarding', 'home', 'home-grouping-crash', 'home-settings', 'home-workspace', 'schedules', 'home-states', 'navigation', 'licenses', 'create-parity', 'model-memory', 'project-picker', 'branch-picker', 'directory', 'project', 'activity', 'notifications', 'diagnostics', 'settings-baseline', 'preferences', 'queued-message-behavior'],
-    'send': ['send', 'send-queue', 'send-guide', 'send-interrupt', 'send-rounds', 'send-scroll-guide', 'send-scroll-queue', 'send-scroll-normal', 'session-native', 'proposal-cards', 'session-simulator', 'permission-native', 'item-details', 'edit-message', 'message-quote', 'session-share', 'agent-error', 'native-diff', 'native-workspace-changes', 'native-file-content', 'dictation', 'run-config-late'],
+    'send': ['send', 'send-queue', 'send-guide', 'send-interrupt', 'send-rounds', 'send-scroll-guide', 'send-scroll-queue', 'send-scroll-normal', 'session-native', 'session-history-progress', 'proposal-cards', 'session-simulator', 'permission-native', 'item-details', 'edit-message', 'message-quote', 'session-share', 'agent-error', 'native-diff', 'native-workspace-changes', 'native-file-content', 'dictation', 'run-config-late'],
     'settings': ['agents-settings', 'agents-presets', 'agents-pi', 'agents-auth-methods', 'prompt-shortcuts', 'project-visibility', 'github-settings', 'ai-usage', 'agent-roles'],
 }
 SUITES = {
@@ -46,6 +46,7 @@ PREVIEW = {
     'role-mention-sheet': 'mention-sheet',
     'agent-roles': 'agent-roles-preview',
     'session-native': 'session-preview-live',
+    'session-history-progress': 'session-preview-bar-history-reading',
     'dictation': 'session-preview-live',
     'proposal-cards': 'session-preview-cards-role-create',
     'session-simulator': 'session-preview-simulator',
@@ -164,6 +165,7 @@ READY = {
     'role-mention-sheet': 'create-session-input',
     'agent-roles': 'list-unavailable-action',
     'session-native': 'session-preview-probe',
+    'session-history-progress': 'session-history-progress',
     'proposal-cards': 'session-preview-probe',
     'session-simulator': 'session-preview-probe',
     'permission-native': 'permission-preview-probe',
@@ -537,7 +539,7 @@ try:
                     script = Path(__file__).with_name('devices.py')
                 if case in ('diagnostics', 'directory', 'project', 'activity', 'settings-baseline', 'workspace-general', 'machine-settings', 'settings-form-backgrounds', 'prompt-shortcuts', 'project-visibility', 'github-settings', 'ai-usage', 'agent-roles'):
                     script = Path(__file__).with_name(f'{case}.py')
-                if case in ('session-native', 'proposal-cards', 'session-simulator', 'permission-native', 'native-diff', 'native-workspace-changes', 'native-file-content'):
+                if case in ('session-native', 'session-history-progress', 'proposal-cards', 'session-simulator', 'permission-native', 'native-diff', 'native-workspace-changes', 'native-file-content'):
                     script = Path(__file__).with_name(f'{case}.py')
                 if case == 'file-selection':
                     script = Path(__file__).with_name('file-selection.py')

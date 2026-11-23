@@ -1,3 +1,4 @@
+import LodyCore
 import LodyDesignSystem
 import SwiftUI
 import UIKit
@@ -101,8 +102,10 @@ struct ChatActionBarState: Decodable, Equatable {
   var context: Context?
   var diff: Diff?
   var primary: Primary?
+  var sessionSyncProgress: RuntimeContract.SessionSyncProgress?
 
-  var isEmpty: Bool { (items ?? []).isEmpty && context == nil && diff == nil && primary == nil }
+  var hasActions: Bool { !(items ?? []).isEmpty || context != nil || diff != nil || primary != nil }
+  var isEmpty: Bool { !hasActions && sessionSyncProgress == nil }
 }
 
 /// Three glass capsules grouped by purpose, so the composer stays the only full-width shape:
@@ -133,6 +136,17 @@ struct ChatActionBarContent: View {
   @Environment(\.dynamicTypeSize) private var typeSize
 
   var body: some View {
+    VStack(alignment: .trailing, spacing: 4) {
+      if state.hasActions { actions }
+      if let progress = state.sessionSyncProgress { sessionProgress(progress) }
+    }
+    .frame(maxWidth: .infinity, alignment: .trailing)
+    .font(.subheadline)
+    .coordinateSpace(name: "chat-action-bar")
+    .onPreferenceChange(PrimaryActionFrame.self, perform: onPrimaryFrame)
+  }
+
+  private var actions: some View {
     LodyGlassGroup(spacing: 8) {
       ViewThatFits(in: .horizontal) {
         row(diffDot: false, folded: false)
@@ -148,9 +162,47 @@ struct ChatActionBarContent: View {
         }
       }
     }
-    .font(.subheadline)
-    .coordinateSpace(name: "chat-action-bar")
-    .onPreferenceChange(PrimaryActionFrame.self, perform: onPrimaryFrame)
+  }
+
+  private func sessionProgress(_ progress: RuntimeContract.SessionSyncProgress) -> some View {
+    let applying = progress.received == progress.total
+    let key: String
+    switch progress.kind {
+    case .history: key = applying ? "chat.historyProgress.applying" : "chat.historyProgress.reading"
+    case .chunks: key = applying ? "chat.syncProgress.applyingChunks" : "chat.syncProgress.readingChunks"
+    case .bootstrap, .updates:
+      if progress.total != nil {
+        key = applying ? "chat.syncProgress.applyingBytes" : "chat.syncProgress.readingBytes"
+      } else if progress.received > 0 {
+        key = "chat.syncProgress.receivedBytes"
+      } else {
+        key = progress.kind == .bootstrap ? "chat.syncProgress.readingSessionData" : "chat.syncProgress.readingUpdates"
+      }
+    }
+    let label = String.localizedStringWithFormat(
+      String(localized: String.LocalizationValue(key), bundle: .lody),
+      progress.received.formatted(), progress.total?.formatted() ?? ""
+    )
+    return VStack(alignment: .trailing, spacing: 3) {
+      Text(label)
+        .lodyTextStyle(.caption)
+        .monospacedDigit()
+        .foregroundStyle(LodyColor.textSecondary)
+      Group {
+        if let total = progress.total {
+          ProgressView(value: Double(progress.received), total: Double(total))
+            .progressViewStyle(.linear)
+            .tint(LodyColor.accentDefault)
+        } else {
+          ChatIndeterminateProgressBar()
+        }
+      }
+      .frame(width: 112)
+      .accessibilityHidden(true)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(label)
+    .accessibilityIdentifier("session-history-progress")
   }
 
   private func row(diffDot: Bool, folded: Bool) -> some View {
@@ -905,3 +957,27 @@ struct ChatMachinePanel: View {
 }
 
 #endif
+
+/// A linear `ProgressView` without a value has no indeterminate animation on iOS (UIProgressView draws an
+/// empty track), so an unknown total sweeps a short segment across the same 4 pt track instead.
+private struct ChatIndeterminateProgressBar: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+      let period = 1.2
+      // Reduce Motion keeps the segment still at the centre.
+      let phase = reduceMotion ? 0.5 : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+      GeometryReader { proxy in
+        let segment = proxy.size.width * 0.3
+        Capsule()
+          .fill(LodyColor.accentDefault)
+          .frame(width: segment)
+          .offset(x: (proxy.size.width + segment) * phase - segment)
+      }
+      .frame(height: 4)
+      .background(LodyColor.fillTertiary)
+      .clipShape(Capsule())
+    }
+  }
+}

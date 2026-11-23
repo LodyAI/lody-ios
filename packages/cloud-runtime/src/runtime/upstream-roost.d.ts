@@ -1,3 +1,5 @@
+import type { SessionSyncProgress } from '../protocol/lody-shared/session-sync-progress.ts';
+
 type DirectoryPage = {
   checkpoint?: string;
   startPosition: number;
@@ -109,6 +111,10 @@ export function createRemoteRoostSessionDataFactory(options: {
     payload: Record<string, unknown>;
   }) => Promise<OwnerResponse>;
 }): (args: { sessionId: string }) => {
+  sessionSyncProgress: {
+    getSnapshot: () => SessionSyncProgress | null;
+    subscribe: (listener: () => void) => () => void;
+  };
   history: {
     count(): Promise<number>;
     observe: (listener: (change: unknown) => void) => {

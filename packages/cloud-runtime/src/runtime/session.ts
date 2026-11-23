@@ -7,7 +7,12 @@ import {
   type MessageQuoteSpan,
 } from '../protocol/message-quotes.ts';
 import { LoroDoc, LoroMap, LoroList, LoroText } from 'loro-crdt/base64';
-import { StreamsClient } from '@loro-dev/streams-client';
+import { StreamsClient, type StreamError } from '@loro-dev/streams-client';
+import {
+  createLoroSyncProgress,
+  observeLoroBootstrap,
+  type SessionSyncProgress,
+} from '../protocol/lody-shared/session-sync-progress.ts';
 import { decompress } from 'fzstd';
 import { decodeFrames, encodeFrame } from '../frames';
 import {
@@ -34,7 +39,13 @@ import {
   HistoryEntryWriteSchema,
   parseHistoryWrite,
 } from './upstream-roost.js';
-import { retrySessionRead, wakeSessionReads } from './session-read';
+import {
+  retrySessionRead,
+  TerminalReadError,
+  waitBeforeRead,
+  wakeSessionReads,
+} from './session-read';
+export { setReadRetryTimer } from './session-read';
 import { resolveTurnRole, type TurnRole } from './agent-roles';
 import { record, roleRunConfigApplied } from '../protocol/agent-roles';
 import type {
@@ -102,6 +113,11 @@ type SessionState = {
   historyReadable?: boolean;
   historySubscriptionFailure?: string;
   streamReady?: boolean;
+  loroSyncProgress?: SessionSyncProgress;
+  /** Whether the pending metadata already names Loro; Roost backends never show Loro bytes. */
+  loroTargetKnown?: () => boolean;
+  syncProgressSent?: { at: number; progress?: SessionSyncProgress };
+  cancelSyncProgress?: () => void;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
   roostMetadata?: Record<string, unknown>[];
@@ -400,6 +416,7 @@ export function resumeAcceptedInputs() {
 export function resumeSessions() {
   wakeSessionReads();
   for (const state of sessions.values()) state.roostReader?.wake();
+  if (active) emitSyncProgress(active, true);
 }
 export async function stopAcceptedInputs() {
   const owner = acceptedInputs;
@@ -417,11 +434,90 @@ const historyList = (state: SessionState) => {
     toJSON: () => turns,
   };
 };
+export type SyncProgressClock = {
+  now: () => number;
+  /** Runs `run` once after `delayMs`; the returned function cancels it. */
+  schedule: (run: () => void, delayMs: number) => () => void;
+};
+const timerClock: SyncProgressClock = {
+  now: () => Date.now(),
+  schedule: (run, delayMs) => {
+    const timer = setTimeout(run, delayMs);
+    return () => clearTimeout(timer);
+  },
+};
+let syncProgressClock = timerClock;
+/** Tests inject a manual clock; no argument restores the timer clock. */
+export function setSyncProgressClock(clock?: SyncProgressClock) {
+  syncProgressClock = clock ?? timerClock;
+}
+/**
+ * Every host event rebuilds native composer state, so intermediate byte or
+ * record counts reach the host at most this often. Transitions (first, kind or
+ * total change, complete, cleared) always go out at once.
+ */
+export const SYNC_PROGRESS_INTERVAL_MS = 100;
 const targetIsCurrent = (state: SessionState) =>
   (state.scopeIsCurrent?.() ?? true) &&
   (state.target?.backend !== 'roost' ||
     !state.target.isCurrent ||
     state.target.isCurrent());
+function currentSyncProgress(state: SessionState) {
+  if (state.target?.backend === 'roost')
+    return (
+      state.roostReader?.sessionData.sessionSyncProgress.getSnapshot() ??
+      undefined
+    );
+  return state.target?.backend === 'loro' || state.loroTargetKnown?.()
+    ? state.loroSyncProgress
+    : undefined;
+}
+const sameSyncProgress = (a?: SessionSyncProgress, b?: SessionSyncProgress) =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.kind === b.kind &&
+    a.received === b.received &&
+    a.total === b.total);
+/** `force` re-publishes the current value to a host that may have dropped it. */
+function emitSyncProgress(state: SessionState, force = false) {
+  if (
+    active !== state ||
+    state.controller.signal.aborted ||
+    !targetIsCurrent(state)
+  )
+    return;
+  const progress = currentSyncProgress(state);
+  const sent = state.syncProgressSent;
+  const now = syncProgressClock.now();
+  const transition =
+    force ||
+    !sent?.progress ||
+    !progress ||
+    progress.kind !== sent.progress.kind ||
+    progress.total !== sent.progress.total ||
+    (progress.total !== undefined && progress.received >= progress.total);
+  if (!transition && now - sent.at < SYNC_PROGRESS_INTERVAL_MS) {
+    state.cancelSyncProgress ??= syncProgressClock.schedule(
+      () => {
+        state.cancelSyncProgress = undefined;
+        emitSyncProgress(state);
+      },
+      sent.at + SYNC_PROGRESS_INTERVAL_MS - now,
+    );
+    return;
+  }
+  state.cancelSyncProgress?.();
+  state.cancelSyncProgress = undefined;
+  // Unforced, a repeat or a clear of nothing shown is not sent.
+  if (!force && sameSyncProgress(sent?.progress, progress)) return;
+  state.syncProgressSent = { at: now, progress };
+  state.emit({
+    type: 'sessionSyncProgress',
+    sessionId: state.id,
+    ...(progress ? { progress } : {}),
+  });
+}
 const sessionControlsReady = (state: SessionState) =>
   !state.controller.signal.aborted &&
   state.status !== 'offline' &&
@@ -768,6 +864,41 @@ function trace(
 ) {
   traceSink({ sessionId: state.id, event, ...fields });
 }
+/** Bytes one session sync window may import, its bootstrap snapshot included. */
+const SESSION_WINDOW_BYTES = 32 * 1024 * 1024;
+/** Catch-up pages one session sync window may read before it is up to date. */
+const SESSION_WINDOW_PAGES = 100;
+/** Expired-cursor bootstraps without a successful read in between before giving up. */
+const MAX_CURSOR_RECOVERIES = 3;
+/** The second recovery waits this long; each later one doubles it. */
+const CURSOR_RECOVERY_DELAY_MS = 1000;
+const decimalOffset = (value: string) =>
+  /^\d{1,20}$/.test(value) ? BigInt(value) : undefined;
+/** Whether Streams offset `next` is after `previous` (zero-padded decimals). */
+function offsetAfter(next: string, previous: string) {
+  const a = decimalOffset(next);
+  const b = decimalOffset(previous);
+  return a !== undefined && b !== undefined && a > b;
+}
+/**
+ * A missing or deleted space or stream and a rejected request fail the same
+ * way on every attempt, so they end the session read. Network, timeout, rate
+ * limit, server and authorization failures (after a grant refresh) retry.
+ */
+function streamReadError(error: StreamError) {
+  const server = error.context?.serverErrorCode;
+  if (error.code === 'conflict' && error.detail?.kind === 'stream_closed')
+    return new TerminalReadError('stream_closed');
+  if (
+    error.code === 'not_found' ||
+    error.code === 'bad_request' ||
+    server === 'space_not_found' ||
+    server === 'space_deleted' ||
+    server === 'space_generation_fenced'
+  )
+    return new TerminalReadError(server ?? error.code);
+  return new Error(error.code);
+}
 async function readAttempt<T>(
   state: SessionState,
   stage: ReadStage,
@@ -1106,10 +1237,15 @@ export function unpack(bytes: Uint8Array) {
 export function importUpdates(doc: LoroDoc, bytes: Uint8Array) {
   for (const frame of decodeFrames(bytes)) doc.import(frame);
 }
-export async function clientFor(id: string, getGrant: () => Promise<Grant>) {
+export async function clientFor(
+  id: string,
+  getGrant: () => Promise<Grant>,
+  fetchRead?: ConstructorParameters<typeof StreamsClient>[0]['fetch'],
+) {
   const grant = await getGrant();
   return new StreamsClient({
     url: `${grant.gatewayBaseUrl.replace(/\/$/, '')}/ds/lody/${encodeURIComponent(id)}`,
+    ...(fetchRead ? { fetch: fetchRead } : {}),
     auth: async () => (await getGrant()).token,
     retry: { maxAttempts: 1 },
     // Keep writes within the native command budget; SDK 0.12+ defaults uploads to 60s.
@@ -1202,6 +1338,7 @@ export async function openSession(
       active = existing;
       sessions.delete(id);
       sessions.set(id, existing);
+      emitSyncProgress(existing, true);
     }
     trimSessions();
     flush(existing);
@@ -1227,9 +1364,50 @@ export async function openSession(
     emit,
     readFailures: 0,
   };
+  if (!resolveTarget) state.loroTargetKnown = () => true;
+  else {
+    let known: boolean | undefined;
+    state.loroTargetKnown = () => {
+      if (known === undefined)
+        try {
+          const backend = resolveTarget()?.backend;
+          if (backend) known = backend === 'loro';
+        } catch {
+          /* Metadata is not authoritative yet. */
+        }
+      return known === true;
+    };
+  }
   if (activate) active = state;
   sessions.set(id, state);
   trimSessions();
+  const loroProgress = createLoroSyncProgress((progress) => {
+    if (state.target?.backend === 'roost') return;
+    if (progress === null && state.loroSyncProgress === undefined) return;
+    state.loroSyncProgress = progress ?? undefined;
+    emitSyncProgress(state);
+  });
+  controller.signal.addEventListener('abort', loroProgress.clear, {
+    once: true,
+  });
+  controller.signal.addEventListener(
+    'abort',
+    () => {
+      state.cancelSyncProgress?.();
+      state.cancelSyncProgress = undefined;
+    },
+    { once: true },
+  );
+  const fetchRead = observeLoroBootstrap(
+    (input, init) => fetch(input, init),
+    loroProgress.beginBootstrap,
+    loroProgress.clear,
+  );
+  const readTail = async (signal: AbortSignal) => {
+    if (active !== state) return;
+    const head = await state.client.head({ signal });
+    return head.ok ? head.result.nextOffset : undefined;
+  };
   const event = (status: string, reason?: string) => {
     // A terminal read failure still needs a reopen even if the other reader
     // keeps receiving data or retrying.
@@ -1265,63 +1443,141 @@ export async function openSession(
   event('syncing');
   void (async () => {
     try {
-      const data = await retrySessionRead(
-        controller.signal,
-        () =>
-          readAttempt(state, 'bootstrap', async () => {
-            state.client = await clientFor(`${workspace}:s:${id}`, () =>
-              sessionGrant(state),
-            );
-            controller.signal.throwIfAborted();
-            const initial = await state.client.bootstrap({
-              signal: controller.signal,
-            });
-            if (!initial.ok) throw new Error(initial.result.code);
-            return initial.result;
-          }),
-        retryStream,
-      );
-      if (sessions.get(id) !== state) return;
-      let size = 0;
+      // One sync window runs from a bootstrap or a live read to the next
+      // up-to-date response. Its bytes and pages are bounded; transient
+      // retries keep the window, and an up-to-date response starts a new one.
+      let windowBytes = 0;
+      let windowPages = 0;
+      let offset = '-1';
+      let cursor: string | undefined;
+      let upToDate = false;
+      // Cursor recoveries not yet followed by a successful read.
+      let recoveries = 0;
+      const endWindow = () => {
+        windowBytes = 0;
+        windowPages = 0;
+      };
       const consume = (bytes: Uint8Array, snapshot = false) => {
-        size += bytes.length;
-        if (size > 32 * 1024 * 1024) throw new Error('session_limit');
+        windowBytes += bytes.length;
+        if (windowBytes > SESSION_WINDOW_BYTES)
+          throw new TerminalReadError('session_limit');
         if (snapshot) state.doc.import(unpack(bytes));
         else importUpdates(state.doc, bytes);
         state.roostReader?.wake();
       };
-      if (data.snapshotOffset !== '-1' && data.snapshot)
-        consume(data.snapshot.body, true);
-      for (const part of data.updates) consume(part.body);
-      let offset = data.nextOffset,
-        cursor = data.cursor,
+      const readBootstrap = () =>
+        retrySessionRead(
+          controller.signal,
+          () =>
+            readAttempt(state, 'bootstrap', async () => {
+              state.client = await clientFor(
+                `${workspace}:s:${id}`,
+                () => sessionGrant(state),
+                fetchRead,
+              );
+              controller.signal.throwIfAborted();
+              const result = await state.client.bootstrap({
+                signal: controller.signal,
+              });
+              if (!result.ok) throw streamReadError(result.result);
+              return result.result;
+            }),
+          retryStream,
+        );
+      const applyBootstrap = (
+        data: Awaited<ReturnType<typeof readBootstrap>>,
+      ) => {
+        endWindow();
+        if (data.snapshotOffset !== '-1' && data.snapshot)
+          consume(data.snapshot.body, true);
+        for (const part of data.updates) consume(part.body);
+        offset = data.nextOffset;
+        cursor = data.cursor;
         upToDate = data.upToDate;
-      let pages = 0;
-      while (!upToDate && !controller.signal.aborted) {
-        if (++pages > 100) throw new Error('session_limit');
+        if (upToDate) {
+          endWindow();
+          loroProgress.clear();
+        }
+      };
+      // The server retired the history before `expired`. Import a fresh
+      // bootstrap into the same document (CRDT import is idempotent) and resume
+      // after it. A bootstrap that does not move past `expired`, or a later
+      // 410 before any successful read, counts against the bound.
+      const recoverCursor = async (expired: string) => {
+        for (;;) {
+          if (recoveries >= MAX_CURSOR_RECOVERIES)
+            throw new TerminalReadError('cursor_expired');
+          if (recoveries > 0)
+            await waitBeforeRead(
+              controller.signal,
+              CURSOR_RECOVERY_DELAY_MS * 2 ** (recoveries - 1),
+            );
+          recoveries++;
+          loroProgress.clear();
+          state.streamReady = false;
+          retrying(new Error('cursor_expired'));
+          const data = await readBootstrap();
+          if (sessions.get(id) !== state) return false;
+          if (!offsetAfter(data.nextOffset, expired)) continue;
+          applyBootstrap(data);
+          return true;
+        }
+      };
+      const readPage = async (stage: 'catchup' | 'poll') => {
+        if (!upToDate && ++windowPages > SESSION_WINDOW_PAGES)
+          throw new TerminalReadError('session_limit');
+        let livePoll = false;
         const next = await retrySessionRead(
           controller.signal,
           () =>
-            readAttempt(state, 'catchup', async () => {
+            readAttempt(state, stage, async () => {
+              livePoll =
+                stage === 'poll' && upToDate && state.streamReady === true;
+              if (!livePoll && state.target?.backend !== 'roost')
+                loroProgress.catchUp(offset, readTail);
               const result = await state.client.readOnce({
                 offset,
                 cursor,
                 signal: controller.signal,
+                ...(livePoll ? { live: 'long-poll' as const } : {}),
               });
-              if (!result.ok) throw new Error(result.result.code);
-              return result;
+              // 410 on a durable read means only that `offset` is below the
+              // retained history; it is recovered outside this retry loop.
+              if (!result.ok && result.result.code === 'gone') return null;
+              if (!result.ok) throw streamReadError(result.result);
+              return result.result;
             }),
           retryStream,
         );
         if (sessions.get(id) !== state) return;
-        if (next.result.payload) consume(next.result.payload.body);
-        if (next.result.nextOffset === offset && !next.result.upToDate)
+        if (next === null) {
+          if (!(await recoverCursor(offset))) return;
+          return { changed: true, hasBytes: true, livePoll: false };
+        }
+        recoveries = 0;
+        if (next.payload) consume(next.payload.body);
+        if (next.nextOffset === offset && !next.upToDate)
           throw new Error('stalled_cursor');
-        offset = next.result.nextOffset;
-        cursor = next.result.cursor;
-        upToDate = next.result.upToDate;
-        if (next.result.closed) throw new Error('stream_closed');
-      }
+        offset = next.nextOffset;
+        cursor = next.cursor;
+        upToDate = next.upToDate;
+        if (next.closed) throw new Error('stream_closed');
+        loroProgress.advance(offset);
+        if (upToDate) {
+          endWindow();
+          loroProgress.clear();
+        }
+        return {
+          changed: Boolean(next.payload),
+          hasBytes: Boolean(next.payload?.body.length),
+          livePoll,
+        };
+      };
+      const initial = await readBootstrap();
+      if (sessions.get(id) !== state) return;
+      applyBootstrap(initial);
+      while (!upToDate && !controller.signal.aborted)
+        if (!(await readPage('catchup'))) return;
       let target: SessionTarget | undefined = resolveTarget
         ? undefined
         : { backend: 'loro' };
@@ -1360,6 +1616,8 @@ export async function openSession(
       if (!target) throw new Error('metadata_not_ready');
       if (sessions.get(id) !== state) return;
       state.target = target;
+      // Loro bytes read before the backend was known were withheld.
+      if (target.backend === 'loro') emitSyncProgress(state);
       if (target.backend === 'roost') {
         const liveHistory = target.live;
         let ownerCheckpoint: string | undefined;
@@ -1407,6 +1665,13 @@ export async function openSession(
           },
         });
         state.roostReader = reader;
+        const stopProgress = reader.sessionData.sessionSyncProgress.subscribe(
+          () => emitSyncProgress(state),
+        );
+        controller.signal.addEventListener('abort', stopProgress, {
+          once: true,
+        });
+        emitSyncProgress(state);
         let window = await retrySessionRead(
           controller.signal,
           () => reader.latest(),
@@ -1510,7 +1775,6 @@ export async function openSession(
           }
         })();
       }
-      pages = 0;
       let changed = true;
       while (!controller.signal.aborted) {
         if (upToDate) {
@@ -1519,43 +1783,15 @@ export async function openSession(
           if (changed || state.status !== 'live')
             event(state.ready ? 'live' : 'syncing');
           changed = false;
-          pages = 0;
-        } else {
-          if (!state.streamReady) event('syncing');
-          if (++pages > 100) throw new Error('session_limit');
-        }
-        let livePoll = false;
-        const next = await retrySessionRead(
-          controller.signal,
-          () =>
-            readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
-              livePoll = upToDate && state.streamReady === true;
-              const result = await state.client.readOnce({
-                offset,
-                cursor,
-                signal: controller.signal,
-                ...(livePoll ? { live: 'long-poll' as const } : {}),
-              });
-              if (!result.ok) throw new Error(result.result.code);
-              return result;
-            }),
-          retryStream,
-        );
-        if (sessions.get(id) !== state) return;
-        if (next.result.payload) {
-          consume(next.result.payload.body);
-          changed = true;
-        }
-        if (next.result.nextOffset === offset && !next.result.upToDate)
-          throw new Error('stalled_cursor');
-        offset = next.result.nextOffset;
-        cursor = next.result.cursor;
-        upToDate = next.result.upToDate;
-        if (next.result.closed) throw new Error('stream_closed');
-        if (livePoll && !next.result.payload?.body.length && upToDate)
+        } else if (!state.streamReady) event('syncing');
+        const next = await readPage(upToDate ? 'poll' : 'catchup');
+        if (!next) return;
+        changed ||= next.changed;
+        if (next.livePoll && !next.hasBytes && upToDate)
           await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
+      loroProgress.clear();
       const failed = error instanceof Error ? error : new Error('sync_failed');
       settleControls(state, failed);
       if (controller.signal.aborted || sessions.get(id) !== state) return;

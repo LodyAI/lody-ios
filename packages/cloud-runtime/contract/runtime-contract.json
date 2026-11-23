@@ -314,6 +314,7 @@
     "session": "SessionEvent",
     "sessionCache": "SessionCacheEvent",
     "sessionSubscriptions": "SessionSubscriptionsEvent",
+    "sessionSyncProgress": "SessionSyncProgressEvent",
     "sessionTrace": "SessionTraceEvent",
     "shareProgress": "ShareProgressEvent",
     "synced": "SyncedEvent",
@@ -3753,6 +3754,34 @@
         }
       },
       "required": ["ids", "reserved"]
+    },
+    "SessionSyncProgress": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["history", "bootstrap", "updates", "chunks"]
+        },
+        "received": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": ["kind", "received"]
+    },
+    "SessionSyncProgressEvent": {
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "minLength": 1 },
+        "progress": { "$ref": "SessionSyncProgress" }
+      },
+      "required": ["sessionId"]
     },
     "SessionTraceEvent": {
       "type": "object",

@@ -1,19 +1,30 @@
 import Foundation
+import LodyCore
+
+struct SessionSyncProgressObservation: Sendable {
+  let userId: String
+  let workspaceId: String
+  let event: RuntimeContract.SessionSyncProgressEvent
+}
 
 struct SessionRuntimeEvent: Sendable {
   var generation = -1
   var state = ""
   var sessionId: String?
   var session: String?
+  var sessionSyncProgress: SessionSyncProgressObservation?
 
-  init(generation: Int = -1, state: String = "", sessionId: String? = nil, session: String? = nil) {
+  init(generation: Int = -1, state: String = "", sessionId: String? = nil, session: String? = nil,
+       sessionSyncProgress: SessionSyncProgressObservation? = nil) {
     (self.generation, self.state, self.sessionId, self.session) = (generation, state, sessionId, session)
+    self.sessionSyncProgress = sessionSyncProgress
   }
 
   init(_ info: [AnyHashable: Any]) {
     self.init(
       generation: (info["generation"] as? NSNumber)?.intValue ?? -1, state: info["state"] as? String ?? "",
-      sessionId: info["sessionId"] as? String, session: info["session"] as? String
+      sessionId: info["sessionId"] as? String, session: info["session"] as? String,
+      sessionSyncProgress: info["sessionSyncProgress"] as? SessionSyncProgressObservation
     )
   }
 }
@@ -28,6 +39,7 @@ struct SessionFeedState: Equatable, Sendable {
   var billableTurnCount: Int?
   var historyHasMore = false
   var historyLoading = false
+  var sessionSyncProgress: RuntimeContract.SessionSyncProgress?
   var composerJSON: String?
   var usageJSON: String?
   var preview: SessionBrowserPreview?
@@ -126,6 +138,7 @@ final class SessionFeed {
     awaitingSnapshot = true
     state.sendReady = false
     state.controlReady = false
+    state.sessionSyncProgress = nil
     changed?()
     service.reconnect(sessionId)
   }
@@ -135,18 +148,32 @@ final class SessionFeed {
     let generation = event.generation
     let session = event.sessionId == sessionId ? event.session : nil
     let phase = event.state
+    let progress = event.sessionSyncProgress
     // Parsing runs off the main thread; status-only events take the same queue to keep arrival order.
     Self.parsing.async {
       let envelope = session.map(SessionEnvelope.prepare)
       DispatchQueue.main.async {
         MainActor.assumeIsolated { [weak self] in
           guard let self, self.token == token else { return }
-          if let envelope {
+          if let progress {
+            guard progress.userId == self.userId, progress.workspaceId == self.workspaceId,
+                  progress.event.sessionId == self.sessionId, generation >= self.cursor.generation else { return }
+            let next: RuntimeContract.SessionSyncProgress? = progress.event.progress.flatMap { count in
+              guard count.received >= 0 else { return nil }
+              if let total = count.total { return total > 0 && count.received <= total ? count : nil }
+              return count.kind == .bootstrap || count.kind == .updates ? count : nil
+            }
+            if self.state.sessionSyncProgress != next {
+              self.state.sessionSyncProgress = next
+              self.changed?()
+            }
+          } else if let envelope {
             self.apply(envelope, generation: generation)
           } else if ["starting", "background", "failed", "stopped"].contains(phase) {
             self.state.status = phase
             self.state.sendReady = false
             self.state.controlReady = false
+            self.state.sessionSyncProgress = nil
             self.state.isLiveUpdate = false
             self.awaitingSnapshot = true
             self.changed?()
@@ -197,7 +224,8 @@ final class SessionFeed {
       state = SessionFeedState(
         status: envelope.status, revision: revision, sendReady: sendReady, controlReady: controlReady, entriesJSON: envelope.entriesJSON,
         billableTurnCount: envelope.billableTurnCount, historyHasMore: envelope.historyHasMore,
-        historyLoading: envelope.historyLoading, composerJSON: envelope.composerJSON, usageJSON: envelope.usageJSON, preview: envelope.preview, transcript: envelope.transcript
+        historyLoading: envelope.historyLoading, sessionSyncProgress: state.sessionSyncProgress,
+        composerJSON: envelope.composerJSON, usageJSON: envelope.usageJSON, preview: envelope.preview, transcript: envelope.transcript
       )
       state.isLiveUpdate = isLiveUpdate
     } else {
