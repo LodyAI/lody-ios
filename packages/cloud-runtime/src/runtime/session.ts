@@ -8,6 +8,11 @@ import {
 } from '../protocol/message-quotes.ts';
 import { LoroDoc, LoroMap, LoroList, LoroText } from 'loro-crdt/base64';
 import { StreamsClient } from '@loro-dev/streams-client';
+import {
+  createLoroSyncProgress,
+  observeLoroBootstrap,
+  type SessionSyncProgress,
+} from '../protocol/lody-shared/session-sync-progress.ts';
 import { decompress } from 'fzstd';
 import { decodeFrames, encodeFrame } from '../frames';
 import {
@@ -102,6 +107,7 @@ type SessionState = {
   historyReadable?: boolean;
   historySubscriptionFailure?: string;
   streamReady?: boolean;
+  loroSyncProgress?: SessionSyncProgress;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
   roostMetadata?: Record<string, unknown>[];
@@ -400,7 +406,7 @@ export function resumeAcceptedInputs() {
 export function resumeSessions() {
   wakeSessionReads();
   for (const state of sessions.values()) state.roostReader?.wake();
-  if (active) emitHistoryProgress(active);
+  if (active) emitSyncProgress(active);
 }
 export async function stopAcceptedInputs() {
   const owner = acceptedInputs;
@@ -423,18 +429,19 @@ const targetIsCurrent = (state: SessionState) =>
   (state.target?.backend !== 'roost' ||
     !state.target.isCurrent ||
     state.target.isCurrent());
-function emitHistoryProgress(state: SessionState) {
+function emitSyncProgress(state: SessionState) {
   if (
-    !state.roostReader ||
     active !== state ||
     state.controller.signal.aborted ||
     !targetIsCurrent(state)
   )
     return;
   const progress =
-    state.roostReader.sessionData.historySyncProgress.getSnapshot();
+    state.target?.backend === 'roost'
+      ? state.roostReader?.sessionData.sessionSyncProgress.getSnapshot()
+      : state.loroSyncProgress;
   state.emit({
-    type: 'sessionHistoryProgress',
+    type: 'sessionSyncProgress',
     sessionId: state.id,
     ...(progress ? { progress } : {}),
   });
@@ -1123,10 +1130,15 @@ export function unpack(bytes: Uint8Array) {
 export function importUpdates(doc: LoroDoc, bytes: Uint8Array) {
   for (const frame of decodeFrames(bytes)) doc.import(frame);
 }
-export async function clientFor(id: string, getGrant: () => Promise<Grant>) {
+export async function clientFor(
+  id: string,
+  getGrant: () => Promise<Grant>,
+  fetchRead?: ConstructorParameters<typeof StreamsClient>[0]['fetch'],
+) {
   const grant = await getGrant();
   return new StreamsClient({
     url: `${grant.gatewayBaseUrl.replace(/\/$/, '')}/ds/lody/${encodeURIComponent(id)}`,
+    ...(fetchRead ? { fetch: fetchRead } : {}),
     auth: async () => (await getGrant()).token,
     retry: { maxAttempts: 1 },
     // Keep writes within the native command budget; SDK 0.12+ defaults uploads to 60s.
@@ -1219,7 +1231,7 @@ export async function openSession(
       active = existing;
       sessions.delete(id);
       sessions.set(id, existing);
-      emitHistoryProgress(existing);
+      emitSyncProgress(existing);
     }
     trimSessions();
     flush(existing);
@@ -1248,6 +1260,25 @@ export async function openSession(
   if (activate) active = state;
   sessions.set(id, state);
   trimSessions();
+  const loroProgress = createLoroSyncProgress((progress) => {
+    if (state.target?.backend === 'roost') return;
+    if (progress === null && state.loroSyncProgress === undefined) return;
+    state.loroSyncProgress = progress ?? undefined;
+    emitSyncProgress(state);
+  });
+  controller.signal.addEventListener('abort', loroProgress.clear, {
+    once: true,
+  });
+  const fetchRead = observeLoroBootstrap(
+    (input, init) => fetch(input, init),
+    loroProgress.beginBootstrap,
+    loroProgress.clear,
+  );
+  const readTail = async (signal: AbortSignal) => {
+    if (active !== state) return;
+    const head = await state.client.head({ signal });
+    return head.ok ? head.result.nextOffset : undefined;
+  };
   const event = (status: string, reason?: string) => {
     // A terminal read failure still needs a reopen even if the other reader
     // keeps receiving data or retrying.
@@ -1283,24 +1314,10 @@ export async function openSession(
   event('syncing');
   void (async () => {
     try {
-      const data = await retrySessionRead(
-        controller.signal,
-        () =>
-          readAttempt(state, 'bootstrap', async () => {
-            state.client = await clientFor(`${workspace}:s:${id}`, () =>
-              sessionGrant(state),
-            );
-            controller.signal.throwIfAborted();
-            const initial = await state.client.bootstrap({
-              signal: controller.signal,
-            });
-            if (!initial.ok) throw new Error(initial.result.code);
-            return initial.result;
-          }),
-        retryStream,
-      );
-      if (sessions.get(id) !== state) return;
       let size = 0;
+      let offset = '-1';
+      let cursor: string | undefined;
+      let upToDate = false;
       const consume = (bytes: Uint8Array, snapshot = false) => {
         size += bytes.length;
         if (size > 32 * 1024 * 1024) throw new Error('session_limit');
@@ -1308,37 +1325,106 @@ export async function openSession(
         else importUpdates(state.doc, bytes);
         state.roostReader?.wake();
       };
-      if (data.snapshotOffset !== '-1' && data.snapshot)
-        consume(data.snapshot.body, true);
-      for (const part of data.updates) consume(part.body);
-      let offset = data.nextOffset,
-        cursor = data.cursor,
+      const readBootstrap = (retired?: { offset: string; cursor?: string }) =>
+        retrySessionRead(
+          controller.signal,
+          () =>
+            readAttempt(state, 'bootstrap', async () => {
+              state.client = await clientFor(
+                `${workspace}:s:${id}`,
+                () => sessionGrant(state),
+                fetchRead,
+              );
+              controller.signal.throwIfAborted();
+              const result = await state.client.bootstrap({
+                signal: controller.signal,
+              });
+              if (!result.ok) throw new Error(result.result.code);
+              if (
+                retired &&
+                retired.offset === result.result.nextOffset &&
+                retired.cursor === result.result.cursor
+              )
+                throw new Error('cursor_expired');
+              return result.result;
+            }),
+          retryStream,
+        );
+      const applyBootstrap = (
+        data: Awaited<ReturnType<typeof readBootstrap>>,
+      ) => {
+        size = 0;
+        if (data.snapshotOffset !== '-1' && data.snapshot)
+          consume(data.snapshot.body, true);
+        for (const part of data.updates) consume(part.body);
+        offset = data.nextOffset;
+        cursor = data.cursor;
         upToDate = data.upToDate;
-      let pages = 0;
-      while (!upToDate && !controller.signal.aborted) {
-        if (++pages > 100) throw new Error('session_limit');
+        if (upToDate) loroProgress.clear();
+      };
+      const readPage = async (stage: 'catchup' | 'poll') => {
+        let livePoll = false;
         const next = await retrySessionRead(
           controller.signal,
           () =>
-            readAttempt(state, 'catchup', async () => {
+            readAttempt(state, stage, async () => {
+              livePoll =
+                stage === 'poll' && upToDate && state.streamReady === true;
+              if (!livePoll && state.target?.backend !== 'roost')
+                loroProgress.catchUp(offset, readTail);
               const result = await state.client.readOnce({
                 offset,
                 cursor,
                 signal: controller.signal,
+                ...(livePoll ? { live: 'long-poll' as const } : {}),
               });
-              if (!result.ok) throw new Error(result.result.code);
-              return result;
+              if (!result.ok) {
+                const code = result.result.context?.serverErrorCode;
+                if (
+                  result.result.code === 'gone' &&
+                  code !== 'space_deleted' &&
+                  code !== 'space_generation_fenced' &&
+                  code !== 'space_not_found'
+                )
+                  return null;
+                throw new Error(result.result.code);
+              }
+              return result.result;
             }),
           retryStream,
         );
         if (sessions.get(id) !== state) return;
-        if (next.result.payload) consume(next.result.payload.body);
-        if (next.result.nextOffset === offset && !next.result.upToDate)
+        if (next === null) {
+          loroProgress.clear();
+          state.streamReady = false;
+          retrying(new Error('cursor_expired'));
+          const data = await readBootstrap({ offset, cursor });
+          if (sessions.get(id) !== state) return;
+          applyBootstrap(data);
+          return { changed: true, hasBytes: true, livePoll: false };
+        }
+        if (next.payload) consume(next.payload.body);
+        if (next.nextOffset === offset && !next.upToDate)
           throw new Error('stalled_cursor');
-        offset = next.result.nextOffset;
-        cursor = next.result.cursor;
-        upToDate = next.result.upToDate;
-        if (next.result.closed) throw new Error('stream_closed');
+        offset = next.nextOffset;
+        cursor = next.cursor;
+        upToDate = next.upToDate;
+        if (next.closed) throw new Error('stream_closed');
+        loroProgress.advance(offset);
+        if (upToDate) loroProgress.clear();
+        return {
+          changed: Boolean(next.payload),
+          hasBytes: Boolean(next.payload?.body.length),
+          livePoll,
+        };
+      };
+      const initial = await readBootstrap();
+      if (sessions.get(id) !== state) return;
+      applyBootstrap(initial);
+      let pages = 0;
+      while (!upToDate && !controller.signal.aborted) {
+        if (++pages > 100) throw new Error('session_limit');
+        if (!(await readPage('catchup'))) return;
       }
       let target: SessionTarget | undefined = resolveTarget
         ? undefined
@@ -1425,13 +1511,13 @@ export async function openSession(
           },
         });
         state.roostReader = reader;
-        const stopProgress = reader.sessionData.historySyncProgress.subscribe(
-          () => emitHistoryProgress(state),
+        const stopProgress = reader.sessionData.sessionSyncProgress.subscribe(
+          () => emitSyncProgress(state),
         );
         controller.signal.addEventListener('abort', stopProgress, {
           once: true,
         });
-        emitHistoryProgress(state);
+        emitSyncProgress(state);
         let window = await retrySessionRead(
           controller.signal,
           () => reader.latest(),
@@ -1549,38 +1635,14 @@ export async function openSession(
           if (!state.streamReady) event('syncing');
           if (++pages > 100) throw new Error('session_limit');
         }
-        let livePoll = false;
-        const next = await retrySessionRead(
-          controller.signal,
-          () =>
-            readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
-              livePoll = upToDate && state.streamReady === true;
-              const result = await state.client.readOnce({
-                offset,
-                cursor,
-                signal: controller.signal,
-                ...(livePoll ? { live: 'long-poll' as const } : {}),
-              });
-              if (!result.ok) throw new Error(result.result.code);
-              return result;
-            }),
-          retryStream,
-        );
-        if (sessions.get(id) !== state) return;
-        if (next.result.payload) {
-          consume(next.result.payload.body);
-          changed = true;
-        }
-        if (next.result.nextOffset === offset && !next.result.upToDate)
-          throw new Error('stalled_cursor');
-        offset = next.result.nextOffset;
-        cursor = next.result.cursor;
-        upToDate = next.result.upToDate;
-        if (next.result.closed) throw new Error('stream_closed');
-        if (livePoll && !next.result.payload?.body.length && upToDate)
+        const next = await readPage(upToDate ? 'poll' : 'catchup');
+        if (!next) return;
+        changed ||= next.changed;
+        if (next.livePoll && !next.hasBytes && upToDate)
           await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
+      loroProgress.clear();
       const failed = error instanceof Error ? error : new Error('sync_failed');
       settleControls(state, failed);
       if (controller.signal.aborted || sessions.get(id) !== state) return;

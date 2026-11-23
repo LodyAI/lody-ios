@@ -5227,6 +5227,125 @@
         }
       }
     },
+    "chat.syncProgress.readingChunks": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同步 %1$@ / %2$@ 块"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Syncing %1$@ / %2$@ chunks"
+          }
+        }
+      }
+    },
+    "chat.syncProgress.applyingChunks": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用数据 %1$@ / %2$@ 块"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applying %1$@ / %2$@ chunks"
+          }
+        }
+      }
+    },
+    "chat.syncProgress.readingBytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同步 %1$@ / %2$@ B"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Syncing %1$@ / %2$@ B"
+          }
+        }
+      }
+    },
+    "chat.syncProgress.applyingBytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用数据 %1$@ / %2$@ B"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applying %1$@ / %2$@ B"
+          }
+        }
+      }
+    },
+    "chat.syncProgress.receivedBytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同步 %1$@ B"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Syncing %1$@ B"
+          }
+        }
+      }
+    },
+    "chat.syncProgress.readingSessionData": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取会话数据"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading session data"
+          }
+        }
+      }
+    },
+    "chat.syncProgress.readingUpdates": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同步会话更新"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Syncing session updates"
+          }
+        }
+      }
+    },
     "chat.notice.syncStopped": {
       "extractionState": "manual",
       "localizations": {

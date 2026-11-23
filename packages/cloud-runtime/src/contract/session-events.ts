@@ -32,17 +32,25 @@ export const SessionCacheEvent = z
   })
   .meta({ id: 'SessionCacheEvent' });
 
-export const SessionHistoryProgress = z
-  .object({ received: z.int().nonnegative(), total: z.int().positive() })
-  .refine(({ received, total }) => received <= total)
-  .meta({ id: 'SessionHistoryProgress' });
+export const SessionSyncProgress = z
+  .object({
+    kind: z.enum(['history', 'bootstrap', 'updates', 'chunks']),
+    received: z.int().nonnegative(),
+    total: z.int().positive().optional(),
+  })
+  .refine(({ kind, received, total }) =>
+    total === undefined
+      ? kind === 'bootstrap' || kind === 'updates'
+      : received <= total,
+  )
+  .meta({ id: 'SessionSyncProgress' });
 
-export const SessionHistoryProgressEvent = z
+export const SessionSyncProgressEvent = z
   .object({
     sessionId: z.string().min(1),
-    progress: SessionHistoryProgress.optional(),
+    progress: SessionSyncProgress.optional(),
   })
-  .meta({ id: 'SessionHistoryProgressEvent' });
+  .meta({ id: 'SessionSyncProgressEvent' });
 
 export const SessionSubscriptionsEvent = z
   .object({
@@ -68,9 +76,7 @@ export type SessionTrace = z.input<typeof SessionTraceEvent>;
 export type SessionRuntimeEvent =
   | ({ type: 'session' } & z.input<typeof SessionEvent>)
   | ({ type: 'sessionCache' } & z.input<typeof SessionCacheEvent>)
-  | ({ type: 'sessionHistoryProgress' } & z.input<
-      typeof SessionHistoryProgressEvent
-    >)
+  | ({ type: 'sessionSyncProgress' } & z.input<typeof SessionSyncProgressEvent>)
   | ({ type: 'sessionSubscriptions' } & z.input<
       typeof SessionSubscriptionsEvent
     >);

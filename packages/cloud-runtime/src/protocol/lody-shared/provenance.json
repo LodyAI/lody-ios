@@ -109,6 +109,13 @@
       "upstream": "packages/shared/src/status-view/vectors/commands.json",
       "sha256": "9da18d567e9d3d5ade8c265d9e74acba0a2e5af6bc4cd802bcf17d8a86aacc3f",
       "adapt": []
+    },
+    {
+      "path": "session-sync-progress.ts",
+      "upstream": "packages/shared/src/session-sync-progress.ts",
+      "commit": "729ef2b37fd8324c9489f5c66e6d50a4bbd45536",
+      "sha256": "f98f17bf3c596f77c85ff6d1ee8674b46d5d4cb0e4e573db37f2db13f6e934d5",
+      "adapt": []
     }
   ]
 }

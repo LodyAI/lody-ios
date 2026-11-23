@@ -70,10 +70,12 @@ owner checks. The host displays the sync status independently of command readine
 The iOS runtime package holds the authoring source in `vendor/upstream-roost`.
 The iOS asset build verifies the generated `src/runtime/upstream-roost.js` against
 that source. Android's runtime snapshot carries the verified module and licenses.
-The reader reports exact staged and planned record counts during multi-page
-catch-up. The runtime forwards those counts to the active conversation in
-small `sessionHistoryProgress` events. A count-free event clears the indicator
-when the checkpoint commits or the reader abandons it.
+The runtime forwards transient `sessionSyncProgress` events to the active
+conversation. Roost counts staged records at one checkpoint. Loro counts bytes
+from the bootstrap response and advances stream offsets after importing pages.
+A bounded head query can supply the target for that incremental read. A retired
+cursor clears the old count before the runtime imports a fresh snapshot. A
+count-free event clears the indicator when the read completes or is abandoned.
 Ready Roost inputs use the same workspace input coordinator as Lody and its
 account/workspace-scoped IndexedDB storage. It persists the exact input before
 handoff, orders inputs by session and checks the owner after an uncertain

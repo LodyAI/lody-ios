@@ -122,6 +122,7 @@ test('reopening within one native generation accepts the fresh session', async (
       'w1',
       async () => ({ token: 'synthetic', gatewayBaseUrl: 'https://x.invalid' }),
       (event) => {
+        if (!event.session) return;
         const data = JSON.parse(event.session);
         if (data.status === 'live') resolve(data);
       },

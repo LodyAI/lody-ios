@@ -239,8 +239,10 @@ extension SessionController {
     ]
     let busy = control.running || sender?.awaitingReply == true || sender?.sending == true || OutboxDispatcher.busy.contains(session.status)
     var bar = actionBarState(session, busy: busy)
-    if let progress = feed.historySyncProgress {
-      bar["historySyncProgress"] = ["received": progress.received, "total": progress.total]
+    if let progress = feed.sessionSyncProgress {
+      var counts: [String: Any] = ["kind": progress.kind.rawValue, "received": progress.received]
+      if let total = progress.total { counts["total"] = total }
+      bar["sessionSyncProgress"] = counts
     }
     composer["actionBar"] = bar
     composer["usage"] = sessionUsage(session, feed: feed)

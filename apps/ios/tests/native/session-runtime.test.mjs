@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { LoroDoc, LoroMap, LoroList, LoroText } from 'loro-crdt/base64';
 import { Flock } from '@loro-dev/flock-wasm/base64';
+import { StreamsClient } from '@loro-dev/streams-client';
 import {
   openTestSession,
   loadRuntime,
@@ -527,9 +528,10 @@ test(
     const fixture = await openTestSession({
       target: { backend: 'roost', machineId: 'm1' },
       onEvent(event) {
-        if (event.type === 'sessionHistoryProgress') {
+        if (event.type === 'sessionSyncProgress') {
           assert.equal(event.sessionId, 's1');
           assert.equal(event.session, undefined);
+          if (event.progress && event.progress.kind !== 'history') return;
           if (event.progress || counts.length)
             counts.push(event.progress ?? null);
           if (!event.progress && counts.length) cleared.resolve();
@@ -605,19 +607,191 @@ test(
     try {
       next.resolve(plan);
       await lastPage.promise;
-      assert.deepEqual(counts.at(-1), { received: 1000, total: 1240 });
+      assert.deepEqual(counts.at(-1), {
+        kind: 'history',
+        received: 1000,
+        total: 1240,
+      });
       finishPage.resolve();
       await Promise.all([cleared.promise, installed.promise]);
       assert.deepEqual(counts, [
-        { received: 0, total: 1240 },
-        { received: 500, total: 1240 },
-        { received: 1000, total: 1240 },
-        { received: 1240, total: 1240 },
+        { kind: 'history', received: 0, total: 1240 },
+        { kind: 'history', received: 500, total: 1240 },
+        { kind: 'history', received: 1000, total: 1240 },
+        { kind: 'history', received: 1240, total: 1240 },
         null,
       ]);
     } finally {
       finishPage.resolve();
       fixture.close();
+    }
+  },
+);
+
+test(
+  'Loro reports applied bytes and resets progress when Streams replaces a cursor',
+  { timeout: 8000 },
+  async (t) => {
+    const runtime = await loadRuntime();
+    globalThis.__sessionClient = StreamsClient;
+    t.after(() => {
+      runtime.stopSessions();
+      delete globalThis.__sessionClient;
+    });
+    const author = new LoroDoc();
+    const append = (id) => {
+      const from = author.version();
+      author.getList('history').push({
+        id,
+        role: 'user',
+        timestamp: '2026-01-01',
+        items: [{ type: 'text', text: id }],
+      });
+      author.commit();
+      return frame(author.export({ mode: 'update', from }));
+    };
+    append('cached');
+    const original = author.export({ mode: 'snapshot' });
+    const first = append('downloaded');
+    const second = append('published-during-read');
+    const replacement = author.export({ mode: 'snapshot' });
+    const start = 100;
+    const next = start + first.byteLength;
+    const end = next + second.byteLength;
+
+    const allowFirstPage = Promise.withResolvers();
+    const allowRetirement = Promise.withResolvers();
+    const allowSnapshot = Promise.withResolvers();
+    const planned = Promise.withResolvers();
+    const partiallyApplied = Promise.withResolvers();
+    const receivingReplacement = Promise.withResolvers();
+    const installed = Promise.withResolvers();
+    const events = [];
+    let bootstraps = 0;
+    const mime = 'application/octet-stream';
+    const header = Buffer.from(`--lody\r\nContent-Type: ${mime}\r\n\r\n`);
+    const footer = Buffer.from('\r\n--lody--\r\n');
+    t.mock.method(globalThis, 'fetch', async (input, { method, signal }) => {
+      const url = new URL(input);
+      if (method === 'HEAD')
+        return new Response(null, {
+          headers: { 'Content-Type': mime, 'Stream-Next-Offset': String(end) },
+        });
+      if (url.pathname.endsWith('/bootstrap')) {
+        const retired = ++bootstraps === 2;
+        const body = Buffer.concat([
+          header,
+          retired ? replacement : original,
+          footer,
+        ]);
+        const response = retired
+          ? new ReadableStream({
+              async start(stream) {
+                stream.enqueue(body.subarray(0, 31));
+                await allowSnapshot.promise;
+                stream.enqueue(body.subarray(31));
+                stream.close();
+              },
+            })
+          : body;
+        return new Response(response, {
+          headers: {
+            'Content-Type': 'multipart/mixed; boundary=lody',
+            'Stream-Next-Offset': String(retired ? end : start),
+            'Stream-Snapshot-Offset': String(retired ? end : start),
+            'Stream-Up-To-Date': String(retired),
+            ...(!retired && { 'Content-Length': String(body.byteLength) }),
+          },
+        });
+      }
+      const offset = url.searchParams.get('offset');
+      if (offset === String(start)) {
+        await allowFirstPage.promise;
+        return new Response(first, {
+          headers: {
+            'Content-Type': mime,
+            'Stream-Next-Offset': String(next),
+            'Stream-Up-To-Date': 'false',
+          },
+        });
+      }
+      if (offset === String(next)) {
+        await allowRetirement.promise;
+        return new Response(null, { status: 410 });
+      }
+      assert.equal(offset, String(end));
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    });
+
+    await runtime.openSession(
+      's1',
+      'w1',
+      async () => ({ token: 'synthetic', gatewayBaseUrl: 'https://x.invalid' }),
+      (event) => {
+        if (event.type === 'sessionSyncProgress') {
+          assert.equal(event.sessionId, 's1');
+          const progress = event.progress ?? null;
+          events.push(progress);
+          if (progress?.kind === 'updates' && progress.total === end - start) {
+            if (progress.received === 0) planned.resolve();
+            if (progress.received === first.byteLength)
+              partiallyApplied.resolve();
+          }
+          if (
+            bootstraps === 2 &&
+            progress?.kind === 'bootstrap' &&
+            progress.received === 31
+          )
+            receivingReplacement.resolve();
+        } else if (event.type === 'session' && event.synced) {
+          installed.resolve(
+            JSON.parse(event.session).entries.map(({ id }) => id),
+          );
+        }
+      },
+      async () => {},
+      true,
+      () => ({ backend: 'loro' }),
+    );
+    try {
+      await planned.promise;
+      allowFirstPage.resolve();
+      await partiallyApplied.promise;
+      assert.deepEqual(events.at(-1), {
+        kind: 'updates',
+        received: first.byteLength,
+        total: end - start,
+      });
+      allowRetirement.resolve();
+      await receivingReplacement.promise;
+      assert.deepEqual(events.slice(-3), [
+        null,
+        { kind: 'bootstrap', received: 0 },
+        { kind: 'bootstrap', received: 31 },
+      ]);
+      allowSnapshot.resolve();
+      assert.deepEqual(await installed.promise, [
+        'cached',
+        'downloaded',
+        'published-during-read',
+      ]);
+      assert.deepEqual(events.slice(-2), [
+        {
+          kind: 'bootstrap',
+          received:
+            header.byteLength + replacement.byteLength + footer.byteLength,
+          total: header.byteLength + replacement.byteLength + footer.byteLength,
+        },
+        null,
+      ]);
+    } finally {
+      allowFirstPage.resolve();
+      allowRetirement.resolve();
+      allowSnapshot.resolve();
     }
   },
 );
@@ -4395,7 +4569,9 @@ test(
         token: 'synthetic',
         gatewayBaseUrl: 'https://x.invalid',
       }),
-      (event) => events.push(JSON.parse(event.session)),
+      (event) => {
+        if (event.session) events.push(JSON.parse(event.session));
+      },
       async () => {
         assert.fail('read recovery must never dispatch');
       },

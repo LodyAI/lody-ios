@@ -7301,44 +7301,6 @@ extension RuntimeContract {
     }
   }
 
-  public struct SessionHistoryProgress: Codable, Sendable, Equatable {
-    public var received: Int
-    public var total: Int
-    public init(received: Int, total: Int) {
-      self.received = received
-      self.total = total
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.received = try c.decode(Int.self, forKey: Key("received"))
-      self.total = try c.decode(Int.self, forKey: Key("total"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.received, forKey: Key("received"))
-      try c.encode(self.total, forKey: Key("total"))
-    }
-  }
-
-  public struct SessionHistoryProgressEvent: Codable, Sendable, Equatable {
-    public var sessionId: String
-    public var progress: SessionHistoryProgress?
-    public init(sessionId: String, progress: SessionHistoryProgress? = nil) {
-      self.sessionId = sessionId
-      self.progress = progress
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.sessionId = try c.decode(String.self, forKey: Key("sessionId"))
-      self.progress = try c.decodeIfPresent(SessionHistoryProgress.self, forKey: Key("progress"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.sessionId, forKey: Key("sessionId"))
-      try c.encodeIfPresent(self.progress, forKey: Key("progress"))
-    }
-  }
-
   public enum SessionPreviewParamsAction: String, Codable, Sendable, Equatable, CaseIterable {
     case create = "create"
     case status = "status"
@@ -7557,6 +7519,55 @@ extension RuntimeContract {
       var c = encoder.container(keyedBy: Key.self)
       try c.encode(self.ids, forKey: Key("ids"))
       try c.encode(self.reserved, forKey: Key("reserved"))
+    }
+  }
+
+  public enum SessionSyncProgressKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case history = "history"
+    case bootstrap = "bootstrap"
+    case updates = "updates"
+    case chunks = "chunks"
+  }
+
+  public struct SessionSyncProgress: Codable, Sendable, Equatable {
+    public var kind: SessionSyncProgressKind
+    public var received: Int
+    public var total: Int?
+    public init(kind: SessionSyncProgressKind, received: Int, total: Int? = nil) {
+      self.kind = kind
+      self.received = received
+      self.total = total
+    }
+    public init(from decoder: any Decoder) throws {
+      let c = try decoder.container(keyedBy: Key.self)
+      self.kind = try c.decode(SessionSyncProgressKind.self, forKey: Key("kind"))
+      self.received = try c.decode(Int.self, forKey: Key("received"))
+      self.total = try c.decodeIfPresent(Int.self, forKey: Key("total"))
+    }
+    public func encode(to encoder: any Encoder) throws {
+      var c = encoder.container(keyedBy: Key.self)
+      try c.encode(self.kind, forKey: Key("kind"))
+      try c.encode(self.received, forKey: Key("received"))
+      try c.encodeIfPresent(self.total, forKey: Key("total"))
+    }
+  }
+
+  public struct SessionSyncProgressEvent: Codable, Sendable, Equatable {
+    public var sessionId: String
+    public var progress: SessionSyncProgress?
+    public init(sessionId: String, progress: SessionSyncProgress? = nil) {
+      self.sessionId = sessionId
+      self.progress = progress
+    }
+    public init(from decoder: any Decoder) throws {
+      let c = try decoder.container(keyedBy: Key.self)
+      self.sessionId = try c.decode(String.self, forKey: Key("sessionId"))
+      self.progress = try c.decodeIfPresent(SessionSyncProgress.self, forKey: Key("progress"))
+    }
+    public func encode(to encoder: any Encoder) throws {
+      var c = encoder.container(keyedBy: Key.self)
+      try c.encode(self.sessionId, forKey: Key("sessionId"))
+      try c.encodeIfPresent(self.progress, forKey: Key("progress"))
     }
   }
 
@@ -10097,8 +10108,8 @@ extension RuntimeContract {
     case machinePresence(RuntimeContract.MachinePresence)
     case session(RuntimeContract.SessionEvent)
     case sessionCache(RuntimeContract.SessionCacheEvent)
-    case sessionHistoryProgress(RuntimeContract.SessionHistoryProgressEvent)
     case sessionSubscriptions(RuntimeContract.SessionSubscriptionsEvent)
+    case sessionSyncProgress(RuntimeContract.SessionSyncProgressEvent)
     case sessionTrace(RuntimeContract.SessionTraceEvent)
     case shareProgress(RuntimeContract.ShareProgressEvent)
     case synced(RuntimeContract.SyncedEvent)
@@ -10209,8 +10220,8 @@ extension RuntimeContract {
         case "machinePresence": message = .event(.machinePresence(try c.decode(RuntimeContract.MachinePresence.self, forKey: Key("payload"))))
         case "session": message = .event(.session(try c.decode(RuntimeContract.SessionEvent.self, forKey: Key("payload"))))
         case "sessionCache": message = .event(.sessionCache(try c.decode(RuntimeContract.SessionCacheEvent.self, forKey: Key("payload"))))
-        case "sessionHistoryProgress": message = .event(.sessionHistoryProgress(try c.decode(RuntimeContract.SessionHistoryProgressEvent.self, forKey: Key("payload"))))
         case "sessionSubscriptions": message = .event(.sessionSubscriptions(try c.decode(RuntimeContract.SessionSubscriptionsEvent.self, forKey: Key("payload"))))
+        case "sessionSyncProgress": message = .event(.sessionSyncProgress(try c.decode(RuntimeContract.SessionSyncProgressEvent.self, forKey: Key("payload"))))
         case "sessionTrace": message = .event(.sessionTrace(try c.decode(RuntimeContract.SessionTraceEvent.self, forKey: Key("payload"))))
         case "shareProgress": message = .event(.shareProgress(try c.decode(RuntimeContract.ShareProgressEvent.self, forKey: Key("payload"))))
         case "synced": message = .event(.synced(try c.decode(RuntimeContract.SyncedEvent.self, forKey: Key("payload"))))

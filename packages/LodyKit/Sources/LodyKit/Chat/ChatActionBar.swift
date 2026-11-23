@@ -102,10 +102,10 @@ struct ChatActionBarState: Decodable, Equatable {
   var context: Context?
   var diff: Diff?
   var primary: Primary?
-  var historySyncProgress: RuntimeContract.SessionHistoryProgress?
+  var sessionSyncProgress: RuntimeContract.SessionSyncProgress?
 
   var hasActions: Bool { !(items ?? []).isEmpty || context != nil || diff != nil || primary != nil }
-  var isEmpty: Bool { !hasActions && historySyncProgress == nil }
+  var isEmpty: Bool { !hasActions && sessionSyncProgress == nil }
 }
 
 /// Three glass capsules grouped by purpose, so the composer stays the only full-width shape:
@@ -138,7 +138,7 @@ struct ChatActionBarContent: View {
   var body: some View {
     VStack(alignment: .trailing, spacing: 4) {
       if state.hasActions { actions }
-      if let progress = state.historySyncProgress { historyProgress(progress) }
+      if let progress = state.sessionSyncProgress { sessionProgress(progress) }
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
     .font(.subheadline)
@@ -164,18 +164,32 @@ struct ChatActionBarContent: View {
     }
   }
 
-  private func historyProgress(_ progress: RuntimeContract.SessionHistoryProgress) -> some View {
-    let key = progress.received == progress.total ? "chat.historyProgress.applying" : "chat.historyProgress.reading"
+  private func sessionProgress(_ progress: RuntimeContract.SessionSyncProgress) -> some View {
+    let applying = progress.received == progress.total
+    let key: String
+    switch progress.kind {
+    case .history: key = applying ? "chat.historyProgress.applying" : "chat.historyProgress.reading"
+    case .chunks: key = applying ? "chat.syncProgress.applyingChunks" : "chat.syncProgress.readingChunks"
+    case .bootstrap, .updates:
+      if progress.total != nil {
+        key = applying ? "chat.syncProgress.applyingBytes" : "chat.syncProgress.readingBytes"
+      } else if progress.received > 0 {
+        key = "chat.syncProgress.receivedBytes"
+      } else {
+        key = progress.kind == .bootstrap ? "chat.syncProgress.readingSessionData" : "chat.syncProgress.readingUpdates"
+      }
+    }
     let label = String.localizedStringWithFormat(
       String(localized: String.LocalizationValue(key), bundle: .lody),
-      progress.received.formatted(), progress.total.formatted()
+      progress.received.formatted(), progress.total?.formatted() ?? ""
     )
     return VStack(alignment: .trailing, spacing: 3) {
       Text(label)
         .lodyTextStyle(.caption)
         .monospacedDigit()
         .foregroundStyle(LodyColor.textSecondary)
-      ProgressView(value: Double(progress.received), total: Double(progress.total))
+      ProgressView(value: progress.total.map { _ in Double(progress.received) }, total: Double(progress.total ?? 1))
+        .progressViewStyle(.linear)
         .tint(LodyColor.accentDefault)
         .frame(width: 112)
         .accessibilityHidden(true)

@@ -369,9 +369,9 @@ final class DataRuntime: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
     case .sessionCache(let value):
       receiveSession(value.sessionId, session: value.session, synced: value.synced,
         work: value.backgroundWork.map { ($0.id, $0.state.rawValue) }, active: false)
-    case .sessionHistoryProgress(let value):
+    case .sessionSyncProgress(let value):
       guard !backgrounded, value.sessionId == sessionId, let workspace, !userId.isEmpty else { return }
-      emitStatus(["sessionHistoryProgress": SessionHistoryProgressObservation(userId: userId, workspaceId: workspace, event: value)])
+      emitStatus(["sessionSyncProgress": SessionSyncProgressObservation(userId: userId, workspaceId: workspace, event: value)])
     case .sessionTrace(let value):
       recordSessionTrace(value)
     #if DEBUG

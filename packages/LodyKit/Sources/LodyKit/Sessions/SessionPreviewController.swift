@@ -341,12 +341,17 @@ private final class SessionPreviewFixture {
           receive(SessionRuntimeEvent(generation: 1, state: "failed"))
         } else {
           receive(SessionRuntimeEvent(generation: 1, state: "live", sessionId: Self.sessionId, session: session))
-          if self.bar == "bar-history-reading" || self.bar == "bar-history-applying" {
-            let total = 1_240
-            let received = self.bar == "bar-history-reading" ? 500 : total
-            receive(SessionRuntimeEvent(generation: 1, historySyncProgress: .init(
+          let progress: RuntimeContract.SessionSyncProgress? = switch self.bar {
+          case "bar-history-reading": .init(kind: .history, received: 500, total: 1_240)
+          case "bar-history-applying": .init(kind: .history, received: 1_240, total: 1_240)
+          case "bar-loro-sync-progress": .init(kind: .updates, received: 512, total: 1_024)
+          case "bar-loro-bootstrap": .init(kind: .bootstrap, received: 512)
+          default: nil
+          }
+          if let progress {
+            receive(SessionRuntimeEvent(generation: 1, sessionSyncProgress: .init(
               userId: self.state.userId, workspaceId: self.state.workspaceId,
-              event: .init(sessionId: Self.sessionId, progress: .init(received: received, total: total))
+              event: .init(sessionId: Self.sessionId, progress: progress)
             )))
           }
         }
