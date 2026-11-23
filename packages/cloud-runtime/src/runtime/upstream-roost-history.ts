@@ -187,7 +187,10 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
       });
     },
     async metadata() {
-      return readSessionHistoryMetadata(data.history);
+      if (options.cloud) return readSessionHistoryMetadata(data.history);
+      return readSessionHistoryMetadata({
+        readDirectory: data.history.readDirectory,
+      });
     },
     async latest() {
       const started = generation;

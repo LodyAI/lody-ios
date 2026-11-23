@@ -97,7 +97,7 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
         export const openSession = (...args) => { globalThis.__target = args[6]; };
         export const ensureSession = () => {}, closeSession = () => {}, loadOlderSession = () => {}, releaseReserve = () => {},
           traceSessionResume = () => {}, traceStalledReads = () => {},
-          startAcceptedInputs = () => {}, resumeAcceptedInputs = () => {}, stopSessions = () => {};
+          startAcceptedInputs = () => {}, resumeAcceptedInputs = () => {}, resumeSessions = () => {}, stopSessions = () => {};
       `,
           }));
         },
@@ -141,8 +141,10 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
     const target = globalThis.__target();
     assert.equal(globalThis.__target.legacyFallbackAllowed(), false);
     assert.equal(target.isCurrent(), true);
-    const { isCurrent, getHistoryProof, ...capabilities } = target;
+    const { isCurrent, getHistoryProof, cloud, ...capabilities } = target;
     assert.equal(typeof getHistoryProof, 'function');
+    assert.equal(cloud.metadata().machineId, 'm');
+    assert.equal(typeof cloud.observe, 'function');
     assert.deepEqual(capabilities, {
       backend: 'roost',
       accountId: 'u',
