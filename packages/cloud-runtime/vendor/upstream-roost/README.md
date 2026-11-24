@@ -5,7 +5,7 @@ Shared support files are from public Lody commit
 The owner transport cache remains at public Lody commit
 [`878e55f8c62133482fc906049d1564d312243b0e`](https://github.com/LodyAI/Lody/commit/878e55f8c62133482fc906049d1564d312243b0e).
 The session bridge, Streams replica, and shared cloud-history contract are copied
-verbatim from public Lody source commit `755e2191aa88d920b392d4b297edc0f6e56a7e19`.
+verbatim from public Lody source commit `8dfd20f92dc81412ecafa786f74462c47f10cd25`.
 `packages/acp-extension-dsh/src/capabilities.ts` is from its upstream submodule
 commit `b1b0735fd8c38d191c87d6fbd14f7a27c0f0421e`, with its
 [license](../../licenses/acp-extension-dsh-LICENSE.txt) in the runtime package.

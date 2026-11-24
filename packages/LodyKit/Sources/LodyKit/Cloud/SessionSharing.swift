@@ -98,8 +98,14 @@ import Security
         var target = intent
         target.removeValue(forKey: "cloudHistory")
         guard let gatewayOrigin else { throw failure() }
-        let grant = try await request("\(BackendEnvironment.site)/api/session-history/roost-read-grant",
-          credential: credential, body: target, transport: transport, timeout: 10)
+        let grant: [String: Any]
+        do {
+          grant = try await request("\(BackendEnvironment.site)/api/session-history/roost-read-grant",
+            credential: credential, body: target, transport: transport, timeout: 10)
+        } catch let error as HTTPStatus {
+          try check()
+          return ["status": error.code]
+        }
         try check()
         guard validCloudHistoryGrant(grant, workspace: workspace, gatewayOrigin: gatewayOrigin) else { throw failure() }
         return grant

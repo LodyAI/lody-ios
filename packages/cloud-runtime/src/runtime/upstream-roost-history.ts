@@ -4,6 +4,7 @@ import {
   parseRoostCloudHistoryGrant,
   readSessionHistoryMetadata,
   roostCloudHistoryBinding,
+  RoostCloudHistoryRequestError,
 } from './upstream-roost.js';
 import { createRoostHistoryTransport, type RoostWindow } from './roost-history';
 
@@ -30,6 +31,7 @@ type RoostSessionOptions = Parameters<typeof createRoostHistoryTransport>[0] & {
   live?: boolean;
   onSubscription?: (state: { checkpoint: string } | { reason: string }) => void;
   cloud?: MobileRoostCloudHistory;
+  onCloudRoute?: (active: boolean) => void;
 };
 
 export function createMobileRoostSessionData(
@@ -38,21 +40,7 @@ export function createMobileRoostSessionData(
 ) {
   const transport = createRoostHistoryTransport(options);
   const cloud = options.cloud;
-  // The replica waits at its tail with a long-poll that its fetch lifetime
-  // (or a suspended host) aborts. Its one failure reason cannot tell that
-  // from a lost connection, so the first failure after a caught-up report is
-  // a re-poll; the replica retries at once and a repeated failure is surfaced.
-  let caughtUp = false;
-  const onCloudSync = (
-    sync: { checkpoint: string } | { reason: string },
-  ): void => {
-    const repoll =
-      caughtUp &&
-      'reason' in sync &&
-      sync.reason === 'roost_cloud_sync_unavailable';
-    caughtUp = 'checkpoint' in sync;
-    if (!repoll) options.onSubscription?.(sync);
-  };
+  let cloudActive = false;
   return createRemoteRoostSessionDataFactory({
     ...options,
     accountId: options.accountId
@@ -60,6 +48,10 @@ export function createMobileRoostSessionData(
       : options.accountId,
     active: () => !options.signal.aborted && (options.isCurrent?.() ?? true),
     ...(cloud && {
+      onCloudHistoryRoute: (active: boolean) => {
+        cloudActive = active;
+        options.onCloudRoute?.(active);
+      },
       cloudHistory: (sessionId: string) => {
         return createRoostHistoryReplica({
           accountId: options.accountId
@@ -85,9 +77,18 @@ export function createMobileRoostSessionData(
             scope.throwIfAborted();
             if (options.isCurrent && !options.isCurrent())
               throw new Error('workspace_changed');
+            if (
+              grant &&
+              typeof grant === 'object' &&
+              'status' in grant &&
+              typeof grant.status === 'number'
+            )
+              throw new RoostCloudHistoryRequestError(grant.status);
             return parseRoostCloudHistoryGrant(grant);
           },
-          onSyncState: onCloudSync,
+          onSyncState: (sync) => {
+            if (cloudActive) options.onSubscription?.(sync);
+          },
         });
       },
     }),
@@ -100,14 +101,15 @@ export function createMobileRoostSessionData(
           (publication) => {
             published = true;
             publish(publication);
-            options.onSubscription?.({ checkpoint: publication.checkpoint });
+            if (!cloudActive)
+              options.onSubscription?.({ checkpoint: publication.checkpoint });
           },
           signal,
         );
         if (!published && !signal.aborted)
           throw new Error('history_subscription_unavailable');
       } catch (error) {
-        if (!signal.aborted && !options.signal.aborted)
+        if (!cloudActive && !signal.aborted && !options.signal.aborted)
           options.onSubscription?.({
             reason:
               error instanceof Error && error.message
@@ -127,12 +129,24 @@ export function createMobileRoostSessionData(
 /** Observe the upstream history in the native transcript's window format. */
 export function createUpstreamRoostHistory(options: RoostSessionOptions) {
   let wake: (() => void) | undefined;
-  const data = createMobileRoostSessionData(options, (next) => {
-    wake = next;
-    return () => {
-      wake = undefined;
-    };
-  });
+  let cloudActive = false;
+  let sourceVersion = 0;
+  const data = createMobileRoostSessionData(
+    {
+      ...options,
+      onCloudRoute(active) {
+        if (active !== cloudActive) sourceVersion++;
+        cloudActive = active;
+        options.onCloudRoute?.(active);
+      },
+    },
+    (next) => {
+      wake = next;
+      return () => {
+        wake = undefined;
+      };
+    },
+  );
   let generation = 0;
   let consumed = 0;
   const changes: unknown[] = [];
@@ -150,6 +164,7 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
   const pageWindow = async (
     page: Awaited<typeof observation.initialPage>,
   ): Promise<RoostWindow> => {
+    const source = sourceVersion;
     const turns = await Promise.all(
       page.rows.map(async (row) => {
         if (row.state !== 'ready' || !row.turnId)
@@ -165,6 +180,8 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
       }),
     );
     options.signal.throwIfAborted();
+    if (source !== sourceVersion)
+      throw new Error('history_observation_superseded');
     return {
       checkpoint: page.checkpoint,
       count: page.totalCount,
@@ -207,7 +224,7 @@ export function createUpstreamRoostHistory(options: RoostSessionOptions) {
       });
     },
     async metadata() {
-      if (options.cloud) return readSessionHistoryMetadata(data.history);
+      if (cloudActive) return readSessionHistoryMetadata(data.history);
       return readSessionHistoryMetadata({
         readDirectory: data.history.readDirectory,
       });

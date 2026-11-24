@@ -84,6 +84,7 @@ export function createRemoteRoostSessionDataFactory(options: {
   cloudHistory?: (
     sessionId: string,
   ) => ReturnType<typeof createRoostHistoryReplica>;
+  onCloudHistoryRoute?: (active: boolean) => void;
   accountId?: string | null;
   workspaceId: string;
   machineId: string;
@@ -180,6 +181,11 @@ export function roostCloudHistoryBinding(
   meta?: Record<string, unknown>,
 ): RoostCloudBinding | undefined;
 export function parseRoostCloudHistoryGrant(value: unknown): RoostCloudGrant;
+export class RoostCloudHistoryRequestError extends Error {
+  constructor(status: number);
+  readonly status: number;
+  readonly retryable: boolean;
+}
 export function createRoostHistoryReplica(options: {
   accountId?: string | null;
   workspaceId: string;

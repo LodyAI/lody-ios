@@ -1,6 +1,6 @@
 export { createRemoteRoostSessionDataFactory } from './packages/components/src/lib/roost-session-bridge';
 export { createRoostHistoryReplica } from './packages/components/src/lib/roost-history-replica';
-export { roostCloudHistoryBinding } from './packages/shared/src/roost-cloud-history';
+export { roostCloudHistoryBinding, RoostCloudHistoryRequestError } from './packages/shared/src/roost-cloud-history';
 import { roostCloudHistoryGrantSchema } from './packages/shared/src/roost-cloud-history';
 export const parseRoostCloudHistoryGrant = (value: unknown) => roostCloudHistoryGrantSchema.parse(value);
 export { readSessionHistoryMetadata } from './session-data';

@@ -147,8 +147,9 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
     const target = globalThis.__target();
     assert.equal(globalThis.__target.legacyFallbackAllowed(), false);
     assert.equal(target.isCurrent(), true);
-    const { isCurrent, getHistoryProof, ...capabilities } = target;
+    const { isCurrent, getHistoryProof, cloud, ...capabilities } = target;
     assert.equal(typeof getHistoryProof, 'function');
+    assert.equal(cloud.metadata().roostCloudAuthor, undefined);
     assert.deepEqual(capabilities, {
       backend: 'roost',
       accountId: 'u',
@@ -191,9 +192,7 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
   }
 });
 
-test('Roost sessions without a published history binding still load from the owner', async () => {
-  // The cloud read grant exists only for a published binding; without one the
-  // grant is refused, so the transcript must keep the owner RPC reader.
+test('an open Roost session can observe the publication of its first history binding', async () => {
   const registerLifecycle = await loadLifecycle();
   const handlers = new Map();
   const flock = new Flock('history-binding');
@@ -223,16 +222,18 @@ test('Roost sessions without a published history binding still load from the own
   try {
     const owner = globalThis.__target();
     assert.equal(owner.backend, 'roost');
-    assert.equal(owner.cloud, undefined);
+    assert.equal(owner.cloud.metadata().roostCloudAuthor, undefined);
+    let notified;
+    const stop = owner.cloud.observe(() => {
+      notified = owner.cloud.metadata().roostCloudAuthor;
+    });
 
     flock.set(['m', 'session-s', 'roostCloudGeneration'], 'root');
     flock.set(['m', 'session-s', 'roostCloudAuthor'], 'A'.repeat(43));
     flock.commit();
-    const published = globalThis.__target();
-    assert.equal(published.cloud.metadata().roostCloudAuthor, 'A'.repeat(43));
-    const wake = () => {};
-    published.cloud.observe(wake);
-    assert.deepEqual(observed, [wake]);
+    for (const wake of observed) wake();
+    assert.equal(notified, 'A'.repeat(43));
+    stop();
   } finally {
     delete globalThis.__target;
   }

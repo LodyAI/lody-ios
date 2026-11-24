@@ -10,7 +10,6 @@ import {
 import { sessionDoc } from '../session';
 import { sessionActionMeta } from '../fork-session';
 import { createMobileRoostSessionData } from '../upstream-roost-history';
-import { roostCloudHistoryBinding } from '../upstream-roost.js';
 import { readShareHistory } from '../sharing/history.ts';
 import { createSharingRuntime } from '../sharing/runtime.ts';
 import { machineFor, type RuntimeContext } from './context.ts';
@@ -40,34 +39,23 @@ export function registerSharing(ctx: RuntimeContext) {
         throw new Error('history_backend_unsupported');
       const workspace = state.workspace;
       const user = state.userId;
-      // Only a published binding authorizes the cloud read grant. Without it,
-      // the owner RPC remains the history reader.
-      const published = roostCloudHistoryBinding(meta) !== undefined;
-      // Promise.withResolvers needs iOS 17.4; the target is 16.4.
-      let settle: ((error?: unknown) => void) | undefined;
-      const caughtUp = new Promise<void>((resolve, reject) => {
-        settle = (error) => (error === undefined ? resolve() : reject(error));
-      });
-      caughtUp.catch(() => {});
       const session = createMobileRoostSessionData({
         accountId: user,
-        ...(published && {
-          cloud: {
-            metadata: () => {
-              const current = state.metaReplica?.flock;
-              return current
-                ? sessionActionMeta(
-                    current.get(['m', room]),
-                    current.scan({ prefix: ['m', room] }),
-                    current.get(['e', room]),
-                  )
-                : undefined;
-            },
-            observe: (wake: () => void) => ctx.observeMeta(wake),
+        cloud: {
+          metadata: () => {
+            if (state.workspace !== workspace || state.userId !== user)
+              return undefined;
+            const current = state.metaReplica?.flock;
+            return current
+              ? sessionActionMeta(
+                  current.get(['m', room]),
+                  current.scan({ prefix: ['m', room] }),
+                  current.get(['e', room]),
+                )
+              : undefined;
           },
-          onSubscription: (sync: { checkpoint: string } | { reason: string }) =>
-            settle?.('checkpoint' in sync ? undefined : new Error(sync.reason)),
-        }),
+          observe: (wake: () => void) => ctx.observeMeta(wake),
+        },
         workspaceId: workspace,
         machineId: meta.machineId,
         sessionId: id,
@@ -77,21 +65,6 @@ export function registerSharing(ctx: RuntimeContext) {
         isCurrent: () => state.workspace === workspace && state.userId === user,
       });
       try {
-        if (published) {
-          // A throwaway replica opens from its persisted local cache. Observe
-          // it so it syncs forward, and capture only after it reports caught up.
-          const aborted = () =>
-            settle?.(signal.reason ?? new Error('cancelled'));
-          signal.addEventListener('abort', aborted, { once: true });
-          const observation = session.history.observe(() => {});
-          observation.initialPage.catch((error: unknown) => settle?.(error));
-          try {
-            await caughtUp;
-          } finally {
-            signal.removeEventListener('abort', aborted);
-            observation.unsubscribe();
-          }
-        }
         return (await session.snapshots.capture()).history;
       } finally {
         session.dispose();

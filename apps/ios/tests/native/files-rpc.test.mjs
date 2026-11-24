@@ -335,6 +335,7 @@ test('sharing a Roost session reads an authoritative owner snapshot', async () =
     },
     channel: { handle: (name, fn) => handlers.set(name, fn), emit() {} },
     getGrant: ctx().getGrant,
+    observeMeta: () => () => {},
     broker: (operation, { intent }) => {
       assert.equal(operation, 'historyToken');
       return ctx().getHistoryProof(intent);

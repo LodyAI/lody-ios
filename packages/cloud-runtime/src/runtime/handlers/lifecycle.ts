@@ -78,15 +78,11 @@ export function registerLifecycle(ctx: RuntimeContext) {
         throw new Error('roost_history_unsupported');
       return {
         backend: 'roost' as const,
-        // Only a published binding authorizes the cloud read grant. Without
-        // it, the owner RPC remains the history reader.
-        ...(roostCloudHistoryBinding(meta) && {
-          cloud: {
-            metadata: () =>
-              isCurrent() ? getDocMeta(`session-${id}`)?.meta : undefined,
-            observe: (wake: () => void) => ctx.observeMeta(wake),
-          },
-        }),
+        cloud: {
+          metadata: () =>
+            isCurrent() ? getDocMeta(`session-${id}`)?.meta : undefined,
+          observe: (wake: () => void) => ctx.observeMeta(wake),
+        },
         accountId: user,
         machineId: meta.machineId as string,
         incremental:

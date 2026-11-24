@@ -37,13 +37,13 @@ unsupported machines create Loro sessions. The resulting backend is written in
 session metadata and never changed by this preference. New Tabs use the same
 selection policy.
 
-The session's metadata selects its history backend. Roost history reads and
-sharing snapshots use the published Streams replica when the session metadata
-carries its published binding (`roostCloudGeneration` / `roostCloudAuthor`);
-without one, the read grant is refused, so the owner RPC remains the reader.
-A sharing snapshot first syncs the replica forward until it reports caught up.
-The owner RPC handles permission responses and history changes. The control document carries the
-shared queue and human-input receipts.
+The session's metadata selects its history backend. A Roost session starts with
+the owner RPC while its stream is unpublished. An open session follows publication
+and switches to Streams after applying the published history. If the owner is
+unreachable, an exact-session grant can discover a published stream before its
+binding appears in metadata. Sharing from Streams first applies the captured tail
+and reads a complete history. Permission responses and history writes use owner
+RPC. The control document carries the shared queue and human-input receipts.
 
 The native `historyToken` broker obtains an exact-session Streams lease for the
 published history and intent-bound owner RPC proofs for writes. The runtime
@@ -57,12 +57,11 @@ Streams grant. The runtime opens the latest published window, backs scroll with
 older windows, and resumes from its durable applied offset. After a history
 subscription failure, live readiness requires a fresh checkpoint that the
 transcript has loaded.
-The replica checkpoint includes its forward offset, which can advance without a
-history change, so a caught-up checkpoint that differs from the installed window
-reloads the window. The first replica failure after a caught-up report is its
-tail long-poll ending (timeout or suspension) and is treated as a re-poll; a
-repeated failure clears readiness. Binding observers follow the current meta
-replica across reconnects (`RuntimeContext.observeMeta`).
+The replica checkpoint includes its forward offset. A caught-up checkpoint that
+differs from the installed window reloads the window. An idle tail long poll
+starts again. An access refusal clears readiness and stops retries for that
+binding. Binding observers follow the current meta replica across reconnects
+(`RuntimeContext.observeMeta`).
 With the control stream caught up and a readable history window installed, Stop
 and Steer can target the known turn and permission requests can be answered
 while the subscription reconnects. Sending

@@ -34,6 +34,7 @@ import {
   type AcceptedInput,
   HistoryEntryWriteSchema,
   parseHistoryWrite,
+  RoostCloudHistoryRequestError,
 } from './upstream-roost.js';
 import { retrySessionRead, wakeSessionReads } from './session-read';
 import { resolveTurnRole, type TurnRole } from './agent-roles';
@@ -708,6 +709,16 @@ function loroWindowStart(state: SessionState, history: LoroList) {
   return start;
 }
 
+function isRoostHistorySuperseded(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === 'history_observation_superseded' ||
+      error.message === 'Roost history observation was superseded' ||
+      error.message === 'Roost cached page cursor needs rebasing' ||
+      error.message === 'Roost history source changed')
+  );
+}
+
 export async function loadOlderSession(sessionId: string) {
   const state = sessions.get(sessionId);
   if (!state || !targetIsCurrent(state)) throw new Error('session_not_ready');
@@ -735,6 +746,9 @@ export async function loadOlderSession(sessionId: string) {
       if (next.start === 0)
         state.roostMetadata = next.turns.map((turn) => ({ ...turn }));
     });
+  } catch (error) {
+    // The active reader will refresh the window after a source change.
+    if (!isRoostHistorySuperseded(error)) throw error;
   } finally {
     state.roostLoading = false;
     if (sessions.get(sessionId) === state) scheduleEmit(state, state.status);
@@ -1252,6 +1266,8 @@ export async function openSession(
     retrying(error);
   };
   const retryHistory = (error: unknown) => {
+    if (error instanceof RoostCloudHistoryRequestError && !error.retryable)
+      throw error;
     state.historyReadable = false;
     state.historyReady = false;
     retrying(error);
@@ -1363,11 +1379,11 @@ export async function openSession(
       if (sessions.get(id) !== state) return;
       state.target = target;
       if (target.backend === 'roost') {
-        const liveHistory = target.cloud !== undefined || target.live;
+        let cloudActive = false;
         let ownerCheckpoint: string | undefined;
         const confirmHistory = () => {
           if (
-            !liveHistory ||
+            (!cloudActive && !target.live) ||
             (ownerCheckpoint &&
               ownerCheckpoint === state.roostWindow?.checkpoint)
           ) {
@@ -1391,6 +1407,13 @@ export async function openSession(
           incremental: target.incremental,
           live: target.live,
           getHistoryProof: target.getHistoryProof,
+          onCloudRoute: (active) => {
+            if (active === cloudActive) return;
+            cloudActive = active;
+            ownerCheckpoint = undefined;
+            state.historyReady = false;
+            updateReadiness();
+          },
           onSubscription: (observation) => {
             if (
               controller.signal.aborted ||
@@ -1410,7 +1433,7 @@ export async function openSession(
               // which can advance without a history change event. Reload the
               // window so readiness confirms against the caught-up checkpoint.
               if (
-                target.cloud &&
+                cloudActive &&
                 ownerCheckpoint !== state.roostWindow?.checkpoint
               )
                 state.roostReader?.reload();
@@ -1461,17 +1484,13 @@ export async function openSession(
         reader.metadataChanged(state.roostMetadata);
         confirmHistory();
         void (async () => {
-          const isSuperseded = (error: unknown) =>
-            error instanceof Error &&
-            (error.message === 'history_observation_superseded' ||
-              error.message === 'Roost history observation was superseded' ||
-              error.message === 'Roost cached page cursor needs rebasing');
           const retryNonSuperseded = async <T>(work: () => Promise<T>) => {
             for (let attempt = 0; ; attempt++) {
               try {
                 return await work();
               } catch (error) {
-                if (!isSuperseded(error) || attempt >= 3) throw error;
+                if (!isRoostHistorySuperseded(error) || attempt >= 3)
+                  throw error;
                 controller.signal.throwIfAborted();
               }
             }
