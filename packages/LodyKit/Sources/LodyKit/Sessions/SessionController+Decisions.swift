@@ -21,9 +21,13 @@ extension SessionController {
     }
     chat.onProposalDecision = { [weak self] row, accept in self?.decideProposal(row, accept: accept) }
     chat.onProposalInspect = { [weak self] row in self?.inspectProposal(row) }
-    chat.onProposalOpenSchedule = { [weak self] _ in
+    chat.onAgentSignIn = { [weak self] in self?.signInAgent() }
+    chat.onProposalOpenSchedule = { [weak self] id in
       guard let self else { return }
-      LodyShell.shared.pushNative("schedules", title: String(localized: "native.chat.proposal.schedules", bundle: .lody), from: self)
+      // Schedules opens that schedule's editor once its live list names it.
+      let page = SchedulesController()
+      page.opening = id
+      _ = LodyShell.shared.pushNative(page, title: String(localized: "native.chat.proposal.schedules", bundle: .lody), from: self)
     }
     chat.onEditMessage = { [weak self] body in
       guard let self, let entryId = body["entryId"] as? String, !entryId.isEmpty, entryId == chat.editableMessageID else { return }
@@ -74,6 +78,18 @@ extension SessionController {
       // A refused edit may be refused because its schedule moved: read it again.
       if failure != nil, row.proposal?.isEdit == true { self.chat.setProposalInspection(entryId: entryId, itemId: itemId, nil) }
     }
+  }
+
+  /// Web's `AcpAuthenticationPanel` under an `acp_auth_required` failure: the same machine
+  /// authentication flow Settings › Agents uses, for this session's computer and Agent config.
+  func signInAgent() {
+    let state = source.state
+    guard chat.agentSignInAvailable, let session = state.catalog.session(sessionId),
+      let config = session.agentConfigId, !config.isEmpty else { return }
+    let target = ProviderTarget(workspaceId: state.workspaceId, machineId: session.machineId, id: config)
+    let page = AgentProviderAuthController(target: target, methods: [], scope: .live(["userId": state.userId, "workspaceId": state.workspaceId]),
+      service: .cloud)
+    LodyShell.shared.presentNative(page, title: String(localized: "native.chat.error.signIn", bundle: .lody), detents: [1])
   }
 
   /// Web `ScheduleEditProposalNotice` follows the live schedule; the card reads it once per

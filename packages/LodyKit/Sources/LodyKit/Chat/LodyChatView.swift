@@ -74,6 +74,9 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   /// Accept (`true`) or dismiss an Agent's proposal row; the owner reports back through `setProposalState`.
   var onProposalDecision: (_ row: ChatRow, _ accept: Bool) -> Void = { _, _ in }
   var onProposalOpenSchedule: (String) -> Void = { _ in }
+  /// Web's sign-in beside an `acp_auth_required` failure; set when the session's agent can authenticate.
+  var agentSignInAvailable = false
+  var onAgentSignIn: () -> Void = {}
   /// Read an undecided edit proposal's live schedule; the owner answers through `setProposalInspection`.
   var onProposalInspect: (_ row: ChatRow) -> Void = { _ in }
   /// Decisions in flight or failed, by `entryId/itemId`.
@@ -393,6 +396,7 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
         cell.configure(row)
         cell.onDetail = { [weak self] in self?.onActivityPress(["entryId": row.entryID, "itemId": row.itemID]) }
         cell.onRetry = { [weak self] in self?.onErrorRetry(["entryId": row.entryID, "itemId": row.itemID, "id": UUID().uuidString.lowercased()]) }
+        cell.onSignIn = { [weak self] in self?.onAgentSignIn() }
         return cell
       }
       if row.kind == "proposal" {

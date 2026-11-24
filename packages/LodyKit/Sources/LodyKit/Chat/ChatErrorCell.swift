@@ -9,8 +9,10 @@ final class ChatErrorCell: UICollectionViewCell {
   private let summaryLabel = UILabel()
   private let retryButton = UIButton(type: .system)
   private let detailButton = UIButton(type: .system)
+  private let signInButton = UIButton(type: .system)
   private var row: ChatRow?
   var onRetry: (() -> Void)?
+  var onSignIn: (() -> Void)?
   var onDetail: (() -> Void)?
 
   override init(frame: CGRect) {
@@ -18,7 +20,7 @@ final class ChatErrorCell: UICollectionViewCell {
     contentView.addSubview(card)
     card.layer.cornerRadius = 10
     card.layer.cornerCurve = .continuous
-    [icon, titleLabel, summaryLabel, retryButton, detailButton].forEach(card.addSubview)
+    [icon, titleLabel, summaryLabel, retryButton, detailButton, signInButton].forEach(card.addSubview)
     titleLabel.numberOfLines = 0
     summaryLabel.numberOfLines = 2
     titleLabel.textColor = .label
@@ -29,6 +31,7 @@ final class ChatErrorCell: UICollectionViewCell {
     isAccessibilityElement = false
     retryButton.addTarget(self, action: #selector(retry), for: .primaryActionTriggered)
     detailButton.addTarget(self, action: #selector(detail), for: .primaryActionTriggered)
+    signInButton.addAction(UIAction { [weak self] _ in self?.onSignIn?() }, for: .primaryActionTriggered)
     lodyObserveTraitChanges([.preferredContentSizeCategory]) { (cell: ChatErrorCell, _) in
       if let row = cell.row { cell.configure(row) }
     }
@@ -55,6 +58,11 @@ final class ChatErrorCell: UICollectionViewCell {
     titleLabel.accessibilityIdentifier = row.id + ":title"
     summaryLabel.accessibilityIdentifier = row.id + ":summary"
     retryButton.accessibilityIdentifier = row.id + ":retry"
+    signInButton.accessibilityIdentifier = row.id + ":signIn"
+    signInButton.isHidden = !row.errorSignIn
+    var signIn = buttonConfiguration(String(localized: "native.chat.error.signIn", bundle: .lody))
+    signIn.image = UIImage(systemName: "person.badge.key")
+    signInButton.configuration = signIn
     detailButton.accessibilityIdentifier = row.id + ":details"
     let retryState = row.errorRetry
     retryButton.isHidden = retryState?.visible != true
@@ -68,7 +76,7 @@ final class ChatErrorCell: UICollectionViewCell {
     details.baseForegroundColor = .secondaryLabel
     detailButton.configuration = details
     // Reconfigured cells keep UIKit's cached accessibility children, which would leave a hidden Retry reachable.
-    card.accessibilityElements = [titleLabel, summaryLabel, retryButton, detailButton].filter { !$0.isHidden }
+    card.accessibilityElements = [titleLabel, summaryLabel, retryButton, signInButton, detailButton].filter { !$0.isHidden }
     setNeedsLayout()
   }
 
@@ -121,7 +129,7 @@ final class ChatErrorCell: UICollectionViewCell {
     return min(ceil(font.lineHeight * 2), textHeight(summary(row), width: width - 48, font: font))
   }
   static func height(_ row: ChatRow, width: CGFloat, traits: UITraitCollection) -> CGFloat {
-    let actions = hasDetail(row) || row.errorRetry?.visible == true
+    let actions = hasDetail(row) || row.errorRetry?.visible == true || row.errorSignIn
     return 12 + 10 + titleHeight(row, width: width, traits: traits) + 4
       + summaryHeight(row, width: width, traits: traits) + (actions ? 44 : 10)
   }
@@ -144,7 +152,12 @@ final class ChatErrorCell: UICollectionViewCell {
     let actionWidth = min(retryWidth, available)
     retryButton.frame = CGRect(x: 36, y: buttonY, width: actionWidth, height: 44)
     retryButton.contentHorizontalAlignment = .leading
-    let detailX: CGFloat = retryButton.isHidden ? 36 : 36 + actionWidth + 20
+    // Sign-in only accompanies an authentication failure, which never offers Retry: it takes that slot.
+    let signInWidth = min(available, ceil(((signInButton.configuration?.title ?? "") as NSString).size(withAttributes: [.font: font]).width) + 40)
+    signInButton.frame = CGRect(x: 36, y: buttonY, width: signInWidth, height: 44)
+    signInButton.contentHorizontalAlignment = .leading
+    var detailX: CGFloat = retryButton.isHidden ? 36 : 36 + actionWidth + 20
+    if !signInButton.isHidden { detailX = 36 + signInWidth + 20 }
     detailButton.frame = CGRect(x: detailX, y: buttonY, width: max(44, width - detailX - 12), height: 44)
     detailButton.contentHorizontalAlignment = .leading
   }

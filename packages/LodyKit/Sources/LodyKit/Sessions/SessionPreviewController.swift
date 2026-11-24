@@ -103,11 +103,18 @@ final class SessionPreviewController: SessionController {
         self?.fixture.decideCard(itemId: row.itemID, accept: accept)
         self?.chat.setProposalState(entryId: row.entryID, itemId: row.itemID, nil)
       }
-      chat.onProposalOpenSchedule = { [weak self] _ in
+      chat.onProposalOpenSchedule = { [weak self] id in
         guard let self else { return }
-        LodyShell.shared.presentNative(
-          SchedulesController(source: source, service: ScheduleFixture.shared.service),
-          title: String(localized: "native.chat.proposal.schedules", bundle: .lody), detents: [1])
+        let page = SchedulesController(source: source, service: ScheduleFixture.shared.service)
+        page.opening = id
+        LodyShell.shared.presentNative(page, title: String(localized: "native.chat.proposal.schedules", bundle: .lody), detents: [1])
+      }
+      if scenario == "cards-notices" {
+        fixtureSignIn = true
+        chat.agentSignInAvailable = true
+        chat.onAgentSignIn = {
+          LodyShell.shared.presentNative(AgentProvidersAuthPreview.make(), title: String(localized: "native.chat.error.signIn", bundle: .lody), detents: [1])
+        }
       }
       chat.onProposalInspect = { [weak self] row in
         guard let result = SessionPreviewFixture.inspection(row.itemID) else { return }
@@ -418,6 +425,7 @@ private final class SessionPreviewFixture {
         ["itemId": "warning", "type": "system_notice", "name": "agent_warning",
          "meta": ["source": "sessionStopTimedOut", "message": "SIGTERM sent; the process is still running."]],
         ["itemId": "future", "type": "system_notice", "name": "future_notice", "meta": ["message": "never shown"]],
+        ["itemId": "auth", "type": "system_notice", "name": "chat_failed", "meta": ["reason": "acp_auth_required", "message": "Authentication required"]],
         ["itemId": "setup", "type": "worktree_script", "phase": "setup", "status": "failed",
          "steps": [["command": "pnpm install", "status": "completed", "output": "Done in 2.1s"],
                    ["command": "pnpm build", "status": "failed", "output": "error TS2304: Cannot find name 'x'."]]],

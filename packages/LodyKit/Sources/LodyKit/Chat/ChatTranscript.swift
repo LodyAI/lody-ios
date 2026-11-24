@@ -292,6 +292,8 @@ struct ChatRow: Equatable {
   var references: [ChatTextReference] = []
   var errorMeta: ChatItem.NoticeMeta? = nil
   var errorRetry: ChatErrorRetryState? = nil
+  /// The failure asks for agent sign-in and this session's agent can start it from here.
+  var errorSignIn = false
   var planIsLatest = true
   var planPermissionItemID = ""
   var planDecision: ChatPlanDecisionState? = nil
@@ -703,13 +705,13 @@ struct ChatTranscript {
             if toolGroup { return item.type != "tool_call" || item.kind == "switch_mode" || item.isContextCompaction }
             return item.type == "text" || item.type == "proposed_plan" || item.isAttachment
           } ?? entry.items.endIndex
-          visible = Array(start..<end).filter { entry.items[$0].type != "proposed_plan" && !entry.items[$0].isAttachment && !entry.items[$0].isChatFailure && !entry.items[$0].hidesFromTranscript }
+          visible = Array(start..<end).filter { entry.items[$0].type != "proposed_plan" && !entry.items[$0].isAttachment && !entry.items[$0].isNotice && !entry.items[$0].hidesFromTranscript }
         } else {
-          visible = entry.items.indices.filter { !answer.contains($0) && entry.items[$0].type != "proposed_plan" && !entry.items[$0].isAttachment && !entry.items[$0].hidesFromTranscript }
+          visible = entry.items.indices.filter { !answer.contains($0) && entry.items[$0].type != "proposed_plan" && !entry.items[$0].isAttachment && !entry.items[$0].isNotice && !entry.items[$0].hidesFromTranscript }
         }
       } else if folds && !expandedWork.contains(entry.id) {
         let process = entry.items.indices.filter {
-          !answer.contains($0) && entry.items[$0].type != "proposed_plan" && !entry.items[$0].isAttachment && !entry.items[$0].isChatFailure && entry.items[$0].type != "subagent_task" && entry.items[$0].operation == nil
+          !answer.contains($0) && entry.items[$0].type != "proposed_plan" && !entry.items[$0].isAttachment && !entry.items[$0].isNotice && entry.items[$0].type != "subagent_task" && entry.items[$0].operation == nil
         }
         if let first = process.first { groups[first] = process }
         visible = process.first.map { [$0] } ?? []
@@ -1029,7 +1031,7 @@ extension ChatTranscript {
   /// last text item. Empty when the turn ends in work.
   static func answerRun(_ items: [ChatItem]) -> [Int] {
     func neverFolded(_ item: ChatItem) -> Bool {
-      item.type == "proposed_plan" || item.type == "plan" || item.isAttachment || item.isChatFailure
+      item.type == "proposed_plan" || item.type == "plan" || item.isAttachment || item.isNotice
         || item.type == "subagent_task" || (item.type == "tool_call" && item.kind == "switch_mode")
     }
     func prose(_ item: ChatItem) -> Bool { item.type == "text" && !(item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

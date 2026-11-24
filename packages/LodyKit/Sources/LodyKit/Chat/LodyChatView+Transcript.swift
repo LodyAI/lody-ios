@@ -26,6 +26,14 @@ extension LodyChatView {
     applyRows()
   }
 
+  /// Native has no schedule subscription: edit proposals read their schedule again whenever the
+  /// conversation returns to the screen. The last answer stays shown until the new one lands.
+  func rereadProposals() {
+    guard !proposalInspectRequested.isEmpty else { return }
+    proposalInspectRequested.removeAll()
+    applyRows()
+  }
+
   func setErrorRetryState(_ json: String) {
     let next = try? JSONDecoder().decode(ChatErrorRetryState.self, from: Data(json.utf8))
     guard next != errorRetryState else { return }
@@ -296,6 +304,7 @@ extension LodyChatView {
         && (row.proposal?.isRole != true || requester == proposalUserID)
     }
     for index in projected.indices where projected[index].kind == "chat_failed" {
+      projected[index].errorSignIn = agentSignInAvailable && projected[index].errorMeta?.reason == "acp_auth_required"
       if let state = errorRetryState, state.entryId == projected[index].entryID, state.itemId == projected[index].itemID {
         projected[index].errorRetry = state
       }

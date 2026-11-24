@@ -120,7 +120,25 @@ ui.element('preview-answer:warning:details')
 text('worktree setup')
 ui.wait(lambda items: not any('never shown' in str(i.get('AXLabel') or '') for i in items),
         'An unknown notice rendered')
+text(catalog.text('native.chat.error.acp_auth_required'))
 ui.capture('system-notices')
+
+
+def close_sheet(gone):
+    """Pull the sheet down by its header: the system dismissal, whatever the page's own close control is."""
+    ui.axe('drag', '--start-x', '200', '--start-y', '110', '--end-x', '200', '--end-y', '800', '--duration', '.4')
+    ui.wait(lambda items: not any(i.get('AXUniqueId') == gone for i in items), f'Sheet did not close: {gone}')
+
+
+# Sign in opens the machine sign-in flow (synthetic provider); Details opens the warning text.
+tap('auth', 'signIn')
+ui.element('provider-auth-status')
+ui.capture('agent-sign-in')
+close_sheet('provider-auth-status')
+tap('warning', 'details')
+text('SIGTERM sent; the process is still running.')
+ui.capture('agent-warning-details')
+close_sheet('agent-error-report')
 
 # Open ends in a sheet; keep navigation last so it cannot cover later root scenes.
 scene('schedules')
@@ -134,7 +152,7 @@ ui.wait(lambda items: any(i.get('AXUniqueId') == 'preview-answer:schedule-pendin
         'Created schedule did not expose Open')
 ui.capture('schedule-create-receipt')
 tap('schedule-created')
-ui.element('home-schedules-list')
-ui.element('schedule:daily-review')
+# Open goes straight to that schedule's editor, over the Schedules list.
+ui.element('schedule-frequency')
 ui.capture('schedule-open')
 
