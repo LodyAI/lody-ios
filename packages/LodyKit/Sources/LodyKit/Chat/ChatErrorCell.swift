@@ -1,6 +1,7 @@
 import UIKit
 
-/// Inline alert content; only the two explicit actions respond to taps.
+/// Inline alert content (`chat_failed`, and `agent_warning` in neutral ink with only Details);
+/// only the two explicit actions respond to taps.
 final class ChatErrorCell: UICollectionViewCell {
   private let card = UIView()
   private let icon = UIImageView()
@@ -40,7 +41,12 @@ final class ChatErrorCell: UICollectionViewCell {
     titleLabel.font = Self.titleFont(traitCollection)
     summaryLabel.text = Self.summary(row)
     summaryLabel.font = Self.bodyFont(traitCollection)
-    let tone: UIColor = row.errorMeta?.reason == "acp_provider_overloaded" ? .systemOrange : .systemRed
+    let warning = row.kind == "agent_warning"
+    icon.image = UIImage(systemName: warning ? "exclamationmark.triangle" : "exclamationmark.circle",
+      withConfiguration: UIImage.SymbolConfiguration(pointSize: 16))
+    // No warning orange in a conversation (iOS conversation rules): a warning keeps neutral ink.
+    var tone: UIColor = row.errorMeta?.reason == "acp_provider_overloaded" ? .systemOrange : .systemRed
+    if warning { tone = .secondaryLabel }
     icon.tintColor = tone
     card.backgroundColor = UIColor { traits in
       tone.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.09 : 0.055)
@@ -57,7 +63,7 @@ final class ChatErrorCell: UICollectionViewCell {
     retry.image = UIImage(systemName: "arrow.clockwise")
     retry.showsActivityIndicator = retryState?.pending == true
     retryButton.configuration = retry
-    detailButton.isHidden = !ChatFailure.hasDetail(row.errorMeta)
+    detailButton.isHidden = !Self.hasDetail(row)
     var details = buttonConfiguration(String(localized: "native.chat.error.details", bundle: .lody))
     details.baseForegroundColor = .secondaryLabel
     detailButton.configuration = details
@@ -96,7 +102,11 @@ final class ChatErrorCell: UICollectionViewCell {
   private static func bodyFont(_ traits: UITraitCollection) -> UIFont {
     UIFont.dynamic(of: 13, compatibleWith: traits)
   }
+  private static func hasDetail(_ row: ChatRow) -> Bool {
+    row.kind == "agent_warning" || ChatFailure.hasDetail(row.errorMeta)
+  }
   private static func summary(_ row: ChatRow) -> String {
+    if row.kind == "agent_warning" { return row.detail }
     if let message = row.errorRetry?.message, !message.isEmpty { return message }
     return ChatFailure.summary(row.errorMeta)
   }
@@ -111,7 +121,7 @@ final class ChatErrorCell: UICollectionViewCell {
     return min(ceil(font.lineHeight * 2), textHeight(summary(row), width: width - 48, font: font))
   }
   static func height(_ row: ChatRow, width: CGFloat, traits: UITraitCollection) -> CGFloat {
-    let actions = ChatFailure.hasDetail(row.errorMeta) || row.errorRetry?.visible == true
+    let actions = hasDetail(row) || row.errorRetry?.visible == true
     return 12 + 10 + titleHeight(row, width: width, traits: traits) + 4
       + summaryHeight(row, width: width, traits: traits) + (actions ? 44 : 10)
   }

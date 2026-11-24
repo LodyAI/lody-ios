@@ -48,6 +48,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   var mentionSequence = 0
   var editable = ""
   var editCheck = ""
+  /// Whether the last rendered feed was live; edit proposals that could not be read retry on going live.
+  var proposalsLive = false
   var quotaEntry = "pending"
   var rendered: [String: String] = [:]
   var infoBar: SessionInfoBar?

@@ -109,6 +109,11 @@ final class SessionPreviewController: SessionController {
           SchedulesController(source: source, service: ScheduleFixture.shared.service),
           title: String(localized: "native.chat.proposal.schedules", bundle: .lody), detents: [1])
       }
+      chat.onProposalInspect = { [weak self] row in
+        guard let result = SessionPreviewFixture.inspection(row.itemID) else { return }
+        // The runtime answers asynchronously; never re-enter the projection that asked.
+        DispatchQueue.main.async { self?.chat.setProposalInspection(entryId: row.entryID, itemId: row.itemID, result) }
+      }
       if scenario == "cards-states" {
         chat.setProposalState(entryId: "preview-answer", itemId: "error", .init(message: String(localized: "native.chat.proposal.error.failed", bundle: .lody)))
         chat.setProposalState(entryId: "preview-answer", itemId: "pending", .init(pending: true))
@@ -271,7 +276,8 @@ private final class SessionPreviewFixture {
   }
 
   func decideCard(itemId: String, accept: Bool) {
-    cardOutcomes[itemId] = accept ? (bar == "cards-schedules" ? "created" : "saved") : "dismissed"
+    let accepted = ["cards-schedules": "created", "cards-schedule-edit": "applied"][bar] ?? "saved"
+    cardOutcomes[itemId] = accept ? accepted : "dismissed"
     revision += 1
     emit()
   }
@@ -352,6 +358,24 @@ private final class SessionPreviewFixture {
     changed?()
   }
 
+  /// Synthetic `inspectProposal` answers for the edit proposal scenes, by item.
+  nonisolated static func inspection(_ itemId: String) -> RuntimeContract.InspectProposalResult? {
+    let daily = RuntimeContract.ScheduleRule(kind: .daily, hour: 9, minute: 0, timeZone: "UTC")
+    let states: [String: RuntimeContract.InspectProposalResultState] = [
+      "edit-pending": .ready, "edit-stale": .stale, "edit-deleted": .unavailable, "edit-teammate": .notOwner,
+    ]
+    guard let state = states[itemId] else { return nil }
+    if state == .unavailable { return .init(state: state, isOwner: false, timeZone: "UTC") }
+    let diff: [RuntimeContract.PromptDiffLine] = [
+      .init(kind: .same, text: "Summarize open tasks."),
+      .init(kind: .del, text: "Post in the team chat."),
+      .init(kind: .add, text: "Post in the team chat with owners."),
+      .init(kind: .add, text: "Flag anything blocked for two days."),
+    ]
+    return .init(state: state, isOwner: state != .notOwner, currentTitle: "Daily review", currentRule: daily,
+      timeZone: "UTC", promptDiff: diff)
+  }
+
   /// Synthetic summaries in the same JSON shape delivered by the cloud runtime.
   /// Keep taller cards separate so each launch is a useful phone screenshot.
   nonisolated static func cardsEnvelope(scenario: String, revision: Int, outcomes: [String: String]) -> String {
@@ -372,8 +396,32 @@ private final class SessionPreviewFixture {
       if outcome == "created" { proposal["scheduleId"] = "daily-review" }
       return ["itemId": id, "type": "system_notice", "name": "schedule_proposal", "proposal": proposal]
     }
+    func edit(_ id: String, outcome: String? = nil) -> [String: Any] {
+      var proposal: [String: Any] = ["kind": "schedule_edit", "proposalId": id, "scheduleId": "daily-review",
+        "title": "Daily review", "baseActivityId": "created-1",
+        "patch": ["title": "Morning review", "prompt": "Summarize open tasks.\nPost in the team chat with owners.",
+          "rule": ["kind": "weekdays", "hour": 8, "minute": 30]]]
+      proposal["outcome"] = outcomes[id] ?? outcome
+      return ["itemId": id, "type": "system_notice", "name": "schedule_edit_proposal", "proposal": proposal]
+    }
     let items: [[String: Any]]
     switch scenario {
+    case "cards-schedule-edit":
+      items = [edit("edit-pending"), edit("edit-applied", outcome: "applied")]
+    case "cards-schedule-edit-states":
+      items = [edit("edit-stale"), edit("edit-deleted"), edit("edit-teammate")]
+    case "cards-notices":
+      items = [
+        ["itemId": "fork", "type": "system_notice", "name": "session_fork_origin",
+         "meta": ["sourceSessionId": "preview-source", "sourceTitle": "Fix the login redirect"]],
+        ["itemId": "resume", "type": "system_notice", "name": "resume_from_external_chat_history", "meta": ["truncated": true]],
+        ["itemId": "warning", "type": "system_notice", "name": "agent_warning",
+         "meta": ["source": "sessionStopTimedOut", "message": "SIGTERM sent; the process is still running."]],
+        ["itemId": "future", "type": "system_notice", "name": "future_notice", "meta": ["message": "never shown"]],
+        ["itemId": "setup", "type": "worktree_script", "phase": "setup", "status": "failed",
+         "steps": [["command": "pnpm install", "status": "completed", "output": "Done in 2.1s"],
+                   ["command": "pnpm build", "status": "failed", "output": "error TS2304: Cannot find name 'x'."]]],
+      ]
     case "cards-role-create":
       items = [role("create", fields: ["name": "Reviewer", "description": "Reviews proposed changes.",
         "promptPrefix": "Focus on correctness and clear feedback."])]
