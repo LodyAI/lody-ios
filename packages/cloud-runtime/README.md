@@ -68,6 +68,9 @@ and Steer can target the known turn and permission requests can be answered
 while the subscription reconnects. Sending
 also requires the session's history metadata. These commands keep their existing
 owner checks. The host displays the sync status independently of command readiness.
+New history on the same source queues a metadata refresh after the in-flight
+read finishes. The runtime can use the last complete metadata from that source
+while the refresh runs. Changing the source clears that metadata.
 
 The iOS runtime package holds the authoring source in `vendor/upstream-roost`.
 The iOS asset build verifies the generated `src/runtime/upstream-roost.js` against

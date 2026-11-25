@@ -1381,6 +1381,14 @@ export async function openSession(
       if (target.backend === 'roost') {
         let cloudActive = false;
         let ownerCheckpoint: string | undefined;
+        let metadataController: AbortController | undefined;
+        let metadataRefreshPending = false;
+        const resetMetadata = () => {
+          metadataController?.abort();
+          metadataController = undefined;
+          metadataRefreshPending = false;
+          state.roostMetadata = undefined;
+        };
         const confirmHistory = () => {
           if (
             (!cloudActive && !target.live) ||
@@ -1412,6 +1420,7 @@ export async function openSession(
             cloudActive = active;
             ownerCheckpoint = undefined;
             state.historyReady = false;
+            resetMetadata();
             updateReadiness();
           },
           onSubscription: (observation) => {
@@ -1425,6 +1434,8 @@ export async function openSession(
               ownerCheckpoint = undefined;
               state.historySubscriptionFailure = observation.reason;
               state.historyReady = false;
+              if (observation.reason === 'roost_cloud_history_changed')
+                resetMetadata();
               retrying(new Error(observation.reason));
             } else {
               ownerCheckpoint = observation.checkpoint;
@@ -1450,35 +1461,47 @@ export async function openSession(
         if (sessions.get(id) !== state) return;
         installHistory(state, window);
         state.historyReadable = true;
-        let metadataRevision = 0;
-        let metadataController: AbortController | undefined;
         const refreshMetadata = () => {
-          const revision = ++metadataRevision;
-          metadataController?.abort();
           if (state.roostWindow?.start === 0) {
+            resetMetadata();
             state.roostMetadata = state.roostWindow.turns.map((turn) => ({
               ...turn,
             }));
             return;
           }
-          state.roostMetadata = undefined;
-          metadataController = new AbortController();
-          const signal = AbortSignal.any([
-            controller.signal,
-            metadataController.signal,
-          ]);
+          // Keep the current source's coherent result while it catches up.
+          // New history requests one follow-up without cancelling the current read.
+          if (metadataController) {
+            metadataRefreshPending = true;
+            return;
+          }
+          const request = new AbortController();
+          metadataController = request;
+          const signal = AbortSignal.any([controller.signal, request.signal]);
           void retrySessionRead(
             signal,
             () => reader.metadata(),
             () => {},
           )
             .then((metadata) => {
-              if (sessions.get(id) !== state || revision !== metadataRevision)
+              if (
+                sessions.get(id) !== state ||
+                signal.aborted ||
+                !targetIsCurrent(state) ||
+                state.roostWindow?.start === 0
+              )
                 return;
               state.roostMetadata = metadata;
               scheduleEmit(state, state.status);
             })
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => {
+              if (metadataController !== request) return;
+              metadataController = undefined;
+              if (!metadataRefreshPending || signal.aborted) return;
+              metadataRefreshPending = false;
+              refreshMetadata();
+            });
         };
         refreshMetadata();
         reader.metadataChanged(state.roostMetadata);
