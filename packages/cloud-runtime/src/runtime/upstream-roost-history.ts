@@ -5,6 +5,7 @@ import {
   readSessionHistoryMetadata,
   roostCloudHistoryBinding,
   RoostCloudHistoryRequestError,
+  RoostCloudHistoryTransportError,
   type RoostHistorySyncState,
 } from './upstream-roost.js';
 import { createRoostHistoryTransport, type RoostWindow } from './roost-history';
@@ -79,13 +80,12 @@ export function createMobileRoostSessionData(
             scope.throwIfAborted();
             if (options.isCurrent && !options.isCurrent())
               throw new Error('workspace_changed');
-            if (
-              grant &&
-              typeof grant === 'object' &&
-              'status' in grant &&
-              typeof grant.status === 'number'
-            )
-              throw new RoostCloudHistoryRequestError(grant.status);
+            if (grant && typeof grant === 'object') {
+              if ('failure' in grant && grant.failure === 'transport')
+                throw new RoostCloudHistoryTransportError();
+              if ('status' in grant && typeof grant.status === 'number')
+                throw new RoostCloudHistoryRequestError(grant.status);
+            }
             return parseRoostCloudHistoryReadResult(grant);
           },
           onSyncState: (sync) => {

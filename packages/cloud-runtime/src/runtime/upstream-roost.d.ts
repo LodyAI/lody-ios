@@ -213,6 +213,9 @@ export class RoostCloudHistoryRequestError extends Error {
   readonly status: number;
   readonly retryable: boolean;
 }
+export class RoostCloudHistoryTransportError extends Error {
+  constructor(options?: ErrorOptions);
+}
 export function createRoostHistoryReplica(options: {
   accountId?: string | null;
   workspaceId: string;

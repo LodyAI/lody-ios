@@ -105,6 +105,14 @@ import Security
         } catch let error as HTTPStatus {
           try check()
           return ["status": error.code]
+        } catch let error as URLError {
+          try check()
+          switch error.code {
+          case .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet:
+            return ["failure": "transport"]
+          default:
+            throw error
+          }
         }
         try check()
         guard validCloudHistoryGrant(grant, workspace: workspace, gatewayOrigin: gatewayOrigin) else { throw failure() }

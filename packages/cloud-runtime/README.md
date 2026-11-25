@@ -37,22 +37,18 @@ unsupported machines create Loro sessions. The resulting backend is written in
 session metadata and never changed by this preference. New Tabs use the same
 selection policy.
 
-The session's metadata selects its history backend. A Roost session starts with
-the owner RPC while its stream is unpublished. An open session follows publication
-and switches to Streams after applying the published history. An exact-session
-probe can report an authorized pending publication and discover a published
-stream before its binding appears in metadata. The conversation's sync status
-shows the selected source, read failures and when a newer publication is pending
-while the previous version remains readable. A Streams HTTP 503 switches to the
-machine only after a fresh exact-session owner read succeeds. Streams continues
-retrying while the machine checks access. Switching to a readable source wakes
-pending history reads, including the first page. Replies and paging cursors from
-the previous selection expire on a switch. The status shows the machine source
-and the Streams failure until catch-up switches back. A known Streams access
-refusal ends the read route. Sharing from Streams first applies
-the captured tail and reads a complete history. Permission responses and history
-writes use owner RPC. The control document carries the shared queue and
-human-input receipts.
+The session's metadata selects its history backend. A remote plaintext Roost
+session requests an exact-session Streams grant, including before its metadata
+contains publication fields. Pending publication and a temporary transport
+failure can use the owning machine after a fresh session read admits access. A
+Streams access refusal ends the read route. Streams prepares its first readable
+window independently during machine admission and while the machine serves
+history. A source switch releases waiting reads to the new source and expires
+former replies and cursors. The sync status shows the selected source and the
+current Streams outcome, including when a previous publication is still readable.
+Sharing from Streams applies the captured tail and reads a complete history.
+Permission responses and history writes use owner RPC. The control document
+carries the shared queue and human-input receipts.
 
 The native `historyToken` broker obtains an exact-session Streams lease for the
 published history and intent-bound owner RPC proofs for writes. The runtime
