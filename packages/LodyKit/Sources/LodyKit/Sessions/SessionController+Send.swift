@@ -457,6 +457,8 @@ private extension RoostHistorySync {
     case .idle, .ready: nil
     case .checking: String(localized: "native.chat.historySync.checking", bundle: .lody)
     case .pending: String(localized: "native.chat.historySync.pending", bundle: .lody)
+    case .ownerRequired:
+      String(localized: "native.chat.historySync.ownerRequired", bundle: .lody)
     case .syncing: String(localized: "native.chat.historySync.syncing", bundle: .lody)
     case .retrying where httpStatus == 403:
       String(localized: "native.chat.historySync.unconfirmed", bundle: .lody)

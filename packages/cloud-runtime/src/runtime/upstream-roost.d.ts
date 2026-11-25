@@ -187,7 +187,8 @@ type RoostCloudGrant = {
   token: string;
   expiresIn: number;
 };
-type RoostCloudReadResult = { state: 'pending' } | RoostCloudGrant;
+type RoostCloudReadResult =
+  { state: 'pending' } | { state: 'owner-required' } | RoostCloudGrant;
 
 export type RoostHistorySyncState = {
   source: 'machine' | 'streams';
@@ -195,6 +196,7 @@ export type RoostHistorySyncState = {
     | 'idle'
     | 'checking'
     | 'pending'
+    | 'owner-required'
     | 'syncing'
     | 'ready'
     | 'retrying'

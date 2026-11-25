@@ -9529,6 +9529,23 @@
         }
       }
     },
+    "native.chat.historySync.ownerRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要目标机器确认历史读取权限"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The target machine must confirm access to this history"
+          }
+        }
+      }
+    },
     "native.chat.historySync.pending": {
       "extractionState": "manual",
       "localizations": {

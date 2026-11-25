@@ -18,14 +18,12 @@ import type { HistoryTokenIntent } from '../../contract/sharing.ts';
 import { sessionActionMeta } from '../fork-session';
 
 import {
-  machineSupportsSessionHistoryProtocol,
   machineSupportsSessionHistoryIncremental,
   machineSupportsSessionHistorySubscription,
   machineSupportsSessionHistoryPatches,
   machineSupportsSessionHistoryInspection,
   machineSupportsSessionInputAcceptance,
   machineSupportsSessionInputDispatch,
-  roostCloudHistoryBinding,
   type SendMetadata,
 } from '../upstream-roost.js';
 
@@ -71,11 +69,6 @@ export function registerLifecycle(ctx: RuntimeContext) {
             protocolCapabilities?: Record<string, unknown>;
           }
         | undefined;
-      if (
-        !machineSupportsSessionHistoryProtocol(capabilityCarrier) &&
-        !roostCloudHistoryBinding(meta)
-      )
-        throw new Error('roost_history_unsupported');
       return {
         backend: 'roost' as const,
         cloud: {

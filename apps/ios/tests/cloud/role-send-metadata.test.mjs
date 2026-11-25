@@ -111,7 +111,7 @@ async function loadLifecycle() {
   ).registerLifecycle;
 }
 
-test('session opening waits for metadata and negotiates Roost capabilities with the owner', async () => {
+test('Roost opening can use Streams before publication and machine capability hints reach the device', async () => {
   const registerLifecycle = await loadLifecycle();
   const handlers = new Map();
   const state = {
@@ -173,7 +173,16 @@ test('session opening waits for metadata and negotiates Roost capabilities with 
       sessionHistorySubscription: 1,
     });
     flock.commit();
-    assert.throws(() => globalThis.__target(), /roost_history_unsupported/);
+    const withoutOwnerProtocol = globalThis.__target();
+    assert.equal(withoutOwnerProtocol.backend, 'roost');
+    assert.equal(typeof withoutOwnerProtocol.getHistoryProof, 'function');
+    assert.equal(
+      withoutOwnerProtocol.cloud.metadata().roostCloudAuthor,
+      undefined,
+    );
+    assert.equal(withoutOwnerProtocol.acceptsInput, false);
+    assert.equal(withoutOwnerProtocol.dispatchesInput, false);
+    assert.equal(globalThis.__target.legacyFallbackAllowed(), false);
     flock.set(['m', 'machine-m', 'protocolCapabilities'], {
       sessionHistory: SESSION_HISTORY_PROTOCOL_VERSION,
     });

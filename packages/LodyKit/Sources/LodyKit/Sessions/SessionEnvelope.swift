@@ -7,7 +7,10 @@ struct SessionBrowserPreview: Equatable, Sendable {
 
 struct RoostHistorySync: Equatable, Sendable {
   enum Source: String, Sendable { case machine, streams }
-  enum Phase: String, Sendable { case idle, checking, pending, syncing, ready, retrying, refused }
+  enum Phase: String, Sendable {
+    case idle, checking, pending, syncing, ready, retrying, refused
+    case ownerRequired = "owner-required"
+  }
 
   let source: Source
   let phase: Phase

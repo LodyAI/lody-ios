@@ -21,7 +21,11 @@ import Security
   /// A Roost history read grant may only name a published `lody-rh` stream of
   /// this workspace on the workspace Streams gateway, matching Android's StreamAccess.
   static func validCloudHistoryGrant(_ grant: [String: Any], workspace: String, gatewayOrigin: String) -> Bool {
-    guard let token = grant["token"] as? String, !token.isEmpty, token.utf8.count <= 8192,
+    if let state = grant["state"] as? String, state == "pending" || state == "owner-required" {
+      return grant.count == 1
+    }
+    guard grant["state"] as? String == "published",
+      let token = grant["token"] as? String, !token.isEmpty, token.utf8.count <= 8192,
       let expiresIn = grant["expiresIn"] as? Int, expiresIn > 0,
       let binding = grant["binding"] as? [String: Any],
       let generation = binding["generation"] as? String,
