@@ -43,9 +43,13 @@ and switches to Streams after applying the published history. An exact-session
 probe can report an authorized pending publication and discover a published
 stream before its binding appears in metadata. The conversation's sync status
 shows the selected source, read failures and when a newer publication is pending
-while the previous version remains readable. Sharing from Streams first applies the captured tail
-and reads a complete history. Permission responses and history writes use owner
-RPC. The control document carries the shared queue and human-input receipts.
+while the previous version remains readable. A Streams HTTP 503 switches to the
+machine only after a fresh exact-session owner read succeeds. The status shows
+the machine source and the Streams failure until catch-up switches back. A known
+Streams access refusal ends the read route. Sharing from Streams first applies
+the captured tail and reads a complete history. Permission responses and history
+writes use owner RPC. The control document carries the shared queue and
+human-input receipts.
 
 The native `historyToken` broker obtains an exact-session Streams lease for the
 published history and intent-bound owner RPC proofs for writes. The runtime

@@ -372,6 +372,79 @@ test('mobile Roost reads published history when the owner RPC times out', async 
   }
 });
 
+test('mobile Roost uses an admitted owner during a published Streams grant outage', async (t) => {
+  for (const allowed of [true, false]) {
+    await t.test(allowed ? 'owner admits' : 'owner refuses', async () => {
+      globalThis.indexedDB = new IDBFactory();
+      globalThis.IDBKeyRange = IDBKeyRange;
+      const controller = new AbortController();
+      const turn = { id: 'owner-turn', role: 'user', timestamp: '2026-01-01' };
+      const scope = { workspaceId: 'w', machineId: 'm', sessionId: 's1' };
+      machine(async (_method, params) => {
+        assert.equal(params.readProof, 'synthetic-owner-proof');
+        if (!allowed) return { error: { code: 'session_history_read_denied' } };
+        return {
+          result: {
+            type: 'session/history-read_response',
+            sessionId: scope.sessionId,
+            success: true,
+            historyRevision: 1,
+            historyCount: 1,
+            result:
+              params.query.kind === 'count'
+                ? 1
+                : {
+                    startPosition: 0,
+                    totalCount: 1,
+                    rows: [{ position: 0, state: 'ready', turnId: turn.id }],
+                    hasMoreOlder: false,
+                    cursor: null,
+                  },
+            pageTurns: [turn],
+          },
+        };
+      });
+      let status;
+      const reader = runtime.createUpstreamRoostHistory({
+        ...ctx(),
+        sessionId: scope.sessionId,
+        signal: controller.signal,
+        cloud: {
+          metadata: () => ({
+            roostCloudGeneration: 'root',
+            roostCloudAuthor: 'A'.repeat(43),
+          }),
+          observe: () => () => {},
+        },
+        getHistoryProof: async (intent) => {
+          if (intent.cloudHistory) {
+            assert.deepEqual(intent, { ...scope, cloudHistory: true });
+            return { status: 503 };
+          }
+          assert.deepEqual(intent, scope);
+          return 'synthetic-owner-proof';
+        },
+        onHistorySync: (next) => (status = next),
+      });
+      try {
+        if (allowed) {
+          assert.deepEqual((await reader.latest()).turns, [turn]);
+          assert.deepEqual(status, {
+            source: 'machine',
+            phase: 'retrying',
+            httpStatus: 503,
+          });
+        } else {
+          await assert.rejects(reader.latest(), /session_history_read_denied/);
+          assert.equal(status.source, 'streams');
+        }
+      } finally {
+        controller.abort();
+      }
+    });
+  }
+});
+
 test('Roost history rejects an encrypted response for another owner', async () => {
   let pending;
   globalThis.__projectClient = class {
