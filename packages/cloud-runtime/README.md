@@ -45,10 +45,11 @@ stream before its binding appears in metadata. The conversation's sync status
 shows the selected source, read failures and when a newer publication is pending
 while the previous version remains readable. A Streams HTTP 503 switches to the
 machine only after a fresh exact-session owner read succeeds. Streams continues
-retrying while the machine checks access. A recovered Streams window resumes the
-current read immediately. The status shows the machine source and the Streams
-failure until catch-up switches back. A known Streams access refusal ends the
-read route. Sharing from Streams first applies
+retrying while the machine checks access. Switching to a readable source wakes
+pending history reads, including the first page. Replies and paging cursors from
+the previous selection expire on a switch. The status shows the machine source
+and the Streams failure until catch-up switches back. A known Streams access
+refusal ends the read route. Sharing from Streams first applies
 the captured tail and reads a complete history. Permission responses and history
 writes use owner RPC. The control document carries the shared queue and
 human-input receipts.
