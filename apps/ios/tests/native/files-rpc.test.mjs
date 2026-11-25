@@ -245,6 +245,131 @@ test('Roost history never retries a write after a transport failure', async () =
   assert.equal(calls.length, 1);
 });
 
+test('mobile Roost reads published history when the owner RPC times out', async (t) => {
+  for (const mode of [
+    'poll timeout',
+    'RPC deadline',
+    'owner denial',
+    'session closed',
+  ]) {
+    await t.test(mode, async (t) => {
+      globalThis.indexedDB = new IDBFactory();
+      globalThis.IDBKeyRange = IDBKeyRange;
+      const controller = new AbortController();
+      const deadline = new AbortController();
+      const expiry = AbortSignal.timeout.bind(AbortSignal);
+      t.mock.method(AbortSignal, 'timeout', (ms) =>
+        ms === 30_000 ? deadline.signal : expiry(ms),
+      );
+      machine(async () =>
+        mode === 'owner denial'
+          ? { error: { code: 'session_history_read_denied' } }
+          : { result: {} },
+      );
+      if (mode !== 'owner denial') {
+        t.mock.method(
+          globalThis.__projectClient.prototype,
+          'readOnce',
+          async () => {
+            if (mode === 'RPC deadline') deadline.abort();
+            if (mode === 'session closed') controller.abort();
+            return {
+              ok: false,
+              result: {
+                code: mode === 'RPC deadline' ? 'cancelled' : 'timeout',
+              },
+            };
+          },
+        );
+      }
+
+      const binding = { generation: 'root', ownerPublicKey: 'A'.repeat(43) };
+      const streamUrl = `https://example.invalid/ds/lody-rh/${encodeURIComponent(
+        `w:rh:m:s1:${binding.ownerPublicKey}:root`,
+      )}`;
+      t.mock.method(globalThis, 'fetch', async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        assert.equal(url.origin + url.pathname, streamUrl);
+        const headers = { 'content-type': 'application/octet-stream' };
+        if ((init?.method ?? input.method) === 'HEAD')
+          return new Response(null, {
+            headers: { ...headers, 'stream-next-offset': '0' },
+          });
+        if (url.searchParams.get('direction') === 'backward')
+          return new Response(new Uint8Array(), {
+            headers: {
+              ...headers,
+              'stream-prev-offset': '0',
+              'stream-end-offset': '0',
+              'stream-tail-offset': '0',
+              'stream-at-start': 'true',
+              'stream-message-spans': '[]',
+            },
+          });
+        if (url.searchParams.has('live')) {
+          const signal = init?.signal ?? input.signal;
+          signal.throwIfAborted();
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            });
+          });
+        }
+        return new Response(null, {
+          status: 204,
+          headers: {
+            ...headers,
+            'stream-next-offset': '0',
+            'stream-up-to-date': 'true',
+          },
+        });
+      });
+      let routed = false;
+      let requestedCloudGrant = false;
+      const reader = runtime.createUpstreamRoostHistory({
+        ...ctx(),
+        sessionId: 's1',
+        signal: controller.signal,
+        cloud: { metadata: () => undefined, observe: () => () => {} },
+        onCloudRoute: (active) => (routed = active),
+        getHistoryProof: async (intent) => {
+          if (!intent.cloudHistory) return 'synthetic-proof';
+          requestedCloudGrant = true;
+          assert.ok(mode === 'poll timeout' || mode === 'RPC deadline');
+          assert.deepEqual(intent, {
+            workspaceId: 'w',
+            machineId: 'm',
+            sessionId: 's1',
+            cloudHistory: true,
+          });
+          return {
+            binding,
+            streamUrl,
+            token: 'synthetic-read-grant',
+            expiresIn: 60,
+          };
+        },
+      });
+      try {
+        if (mode === 'owner denial') {
+          await assert.rejects(reader.latest(), /session_history_read_denied/);
+          assert.equal(routed, false);
+          assert.equal(requestedCloudGrant, false);
+        } else if (mode === 'session closed') {
+          await assert.rejects(reader.latest(), { name: 'AbortError' });
+          assert.equal(routed, false);
+          assert.equal(requestedCloudGrant, false);
+        } else {
+          assert.deepEqual((await reader.latest()).turns, []);
+          assert.equal(routed, true);
+        }
+      } finally {
+        controller.abort();
+      }
+    });
+  }
+});
+
 test('Roost history rejects an encrypted response for another owner', async () => {
   let pending;
   globalThis.__projectClient = class {

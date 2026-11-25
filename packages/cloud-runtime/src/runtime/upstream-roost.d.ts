@@ -19,6 +19,13 @@ type OwnerResponse = {
   retryReason?: 'superseded';
 };
 
+export type HistoryReadTransportFailure = {
+  source: 'transport';
+  code: 'response_timeout' | 'request_failed';
+  requestId: string;
+  machineId: string;
+};
+
 export type HistorySubscriptionOpen = {
   action: 'open';
   id: string;
@@ -105,7 +112,7 @@ export function createRemoteRoostSessionDataFactory(options: {
     machineId: string,
     sessionId: string,
     query: { kind: string; [key: string]: unknown },
-  ) => Promise<OwnerResponse>;
+  ) => Promise<OwnerResponse & { rpcFailure?: HistoryReadTransportFailure }>;
   requestHistoryWrite: (args: {
     machineId: string;
     sessionId: string;
