@@ -148,8 +148,15 @@ export function registerSessions(
     );
   });
   channel.handle('createTab', async (args) => {
-    const replica = metaWrite(args, true);
-    if (creating || !state.userId) return { state: 'rejected' };
+    if (
+      creating ||
+      !state.userId ||
+      args.workspaceId !== state.workspace ||
+      !state.metaReplica ||
+      state.unhealthy.has('meta')
+    )
+      return { state: 'rejected' };
+    const replica = state.metaReplica;
     creating = true;
     try {
       const owner = tabOwner(args.parentSessionId, (id) => {
@@ -171,7 +178,8 @@ export function registerSessions(
       const session = projectRows(replica.flock.scan(), 'meta').sessions.find(
         (s) => s.id === owner.id,
       );
-      if (!session) return { state: 'rejected' };
+      if (!session || state.unhealthy.has(session.machineId))
+        return { state: 'rejected' };
       const options = creationOptions(
         undefined,
         replica.flock,

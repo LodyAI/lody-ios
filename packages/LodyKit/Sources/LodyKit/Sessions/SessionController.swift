@@ -425,9 +425,13 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   private func createTab() {
     guard !creatingTab, let runtime = DataRuntime.current else { return }
     if let attemptedTab {
-      createdTab = attemptedTab
-      openCreatedTab()
-      return
+      self.attemptedTab = nil
+      if source.state.catalog.session(attemptedTab) != nil {
+        createdTab = nil
+        LodyShell.shared.openSessionFromExternal(attemptedTab)
+        return
+      }
+      if createdTab == attemptedTab { createdTab = nil }
     }
     let target = UUID().uuidString.lowercased()
     attemptedTab = target
@@ -459,7 +463,12 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
           LodyToastOverlay.shared.show(message: String(localized: "session.tabs.unknown", bundle: .lody), kind: .warning)
         }
       } catch {
-        LodyToastOverlay.shared.show(message: String(localized: "session.tabs.unknown", bundle: .lody), kind: .warning)
+        if DataRuntime.isUncertainWrite(error) {
+          LodyToastOverlay.shared.show(message: String(localized: "session.tabs.unknown", bundle: .lody), kind: .warning)
+        } else {
+          self.attemptedTab = nil
+          LodyToastOverlay.shared.show(message: String(localized: "session.tabs.failed", bundle: .lody), kind: .error)
+        }
       }
     }
   }
@@ -467,6 +476,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   private func openCreatedTab() {
     guard let target = createdTab, source.state.catalog.session(target) != nil else { return }
     createdTab = nil
+    if attemptedTab == target { attemptedTab = nil }
     LodyShell.shared.openSessionFromExternal(target)
   }
 
