@@ -152,10 +152,28 @@ enum ChatTableViewport {
     return name.contains("TableView") && !(view is UITableView)
   }
 
+  static func isCode(_ view: UIView) -> Bool {
+    NSStringFromClass(type(of: view)).hasSuffix("CodeView")
+  }
+
   static func tables(in view: UIView) -> [UIView] {
     var found: [UIView] = []
     if isTable(view) { found.append(view) }
     for subview in view.subviews { found += tables(in: subview) }
+    return found
+  }
+
+  static func codeLabels(in root: UIView) -> [TextLabelView] {
+    var found: [TextLabelView] = []
+    func walk(_ view: UIView, insideCode: Bool) {
+      if insideCode, let label = view as? TextLabelView, label.isSelectable {
+        found.append(label)
+        return
+      }
+      let next = insideCode || isCode(view)
+      for subview in view.subviews { walk(subview, insideCode: next) }
+    }
+    walk(root, insideCode: false)
     return found
   }
 

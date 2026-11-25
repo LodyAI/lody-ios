@@ -4,6 +4,7 @@ import UIKit
 final class ChatMarkdownCell: UICollectionViewCell {
   private var markdown: ChatMarkdownView?
   var selectionLabels: [TextLabelView] { markdown?.selectionLabels ?? [] }
+  var codeSelectionLabels: [TextLabelView] { markdown?.codeSelectionLabels ?? [] }
   var tableSelectionGroups: [TextSelectionGroup] { markdown?.tableSelectionGroups ?? [] }
   private let icon = UIImageView()
   private(set) var row: ChatRow?
@@ -147,16 +148,34 @@ extension LodyChatView: TextSelectionGroupDelegate {
     var previous: IndexPath?
     var key = ""
     for index in collection.indexPathsForVisibleItems.sorted() {
-      guard let cell = collection.cellForItem(at: index) as? ChatMarkdownCell,
-            let row = cell.row else { previous = nil; continue }
-      if previous?.section != index.section || previous?.item != index.item - 1 {
-        key = row.id
+      let cell = collection.cellForItem(at: index)
+      if let cell = cell as? ChatMarkdownCell, let row = cell.row {
+        if previous?.section != index.section || previous?.item != index.item - 1 {
+          key = row.id
+        }
+        runs[key, default: []].append(contentsOf: cell.selectionLabels)
+        for label in cell.codeSelectionLabels {
+          runs["code:\(ObjectIdentifier(label))"] = [label]
+        }
+        for group in cell.tableSelectionGroups {
+          visibleTables[ObjectIdentifier(group)] = group
+        }
+        previous = index
+      } else if let cell = cell as? ChatPlanCell, let row = cell.row {
+        // Keep plan cards scoped to their own selection group rather than bridging adjacent rows.
+        previous = nil
+        if !cell.selectionLabels.isEmpty {
+          runs["plan:\(row.id)"] = cell.selectionLabels
+        }
+        for label in cell.codeSelectionLabels {
+          runs["code:\(ObjectIdentifier(label))"] = [label]
+        }
+        for group in cell.tableSelectionGroups {
+          visibleTables[ObjectIdentifier(group)] = group
+        }
+      } else {
+        previous = nil
       }
-      runs[key, default: []].append(contentsOf: cell.selectionLabels)
-      for group in cell.tableSelectionGroups {
-        visibleTables[ObjectIdentifier(group)] = group
-      }
-      previous = index
     }
     // A lone label joins a group of one too, so every agent passage offers Quote in its menu.
     for (key, group) in markdownSelections where runs[key] == nil {
