@@ -39,10 +39,11 @@ selection policy.
 
 The session's metadata selects its history backend. A Roost session starts with
 the owner RPC while its stream is unpublished. An open session follows publication
-and switches to Streams after applying the published history. If the owner is
-unreachable or its history RPC times out, an exact-session grant can discover a
-published stream before its binding appears in metadata. The open reader retries
-temporary Streams failures. Sharing from Streams first applies the captured tail
+and switches to Streams after applying the published history. An exact-session
+probe can report an authorized pending publication and discover a published
+stream before its binding appears in metadata. The conversation's sync status
+shows the selected source, read failures and when a newer publication is pending
+while the previous version remains readable. Sharing from Streams first applies the captured tail
 and reads a complete history. Permission responses and history writes use owner
 RPC. The control document carries the shared queue and human-input receipts.
 

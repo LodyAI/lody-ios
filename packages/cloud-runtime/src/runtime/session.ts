@@ -35,6 +35,7 @@ import {
   HistoryEntryWriteSchema,
   parseHistoryWrite,
   RoostCloudHistoryRequestError,
+  type RoostHistorySyncState,
 } from './upstream-roost.js';
 import { retrySessionRead, wakeSessionReads } from './session-read';
 import { resolveTurnRole, type TurnRole } from './agent-roles';
@@ -104,6 +105,7 @@ type SessionState = {
   historyReady?: boolean;
   historyReadable?: boolean;
   historySubscriptionFailure?: string;
+  historySync?: RoostHistorySyncState;
   streamReady?: boolean;
   roostReader?: Awaited<ReturnType<typeof createUpstreamRoostHistory>>;
   roostWindow?: RoostWindow;
@@ -933,6 +935,7 @@ function flush(state: SessionState) {
     snapshot.sendReady = sessionSendReady(state);
     snapshot.historyHasMore = !!state.roostWindow?.cursor;
     snapshot.historyLoading = state.roostLoading === true;
+    snapshot.historySync = state.historySync;
     const pending = (acceptedInputs?.getSnapshot() ?? []).filter(
       (send) =>
         send.sessionId === state.id &&
@@ -1422,6 +1425,16 @@ export async function openSession(
             state.historyReady = false;
             resetMetadata();
             updateReadiness();
+          },
+          onHistorySync: (next) => {
+            if (
+              controller.signal.aborted ||
+              sessions.get(id) !== state ||
+              !targetIsCurrent(state)
+            )
+              return;
+            state.historySync = next;
+            scheduleEmit(state, state.status, state.reason);
           },
           onSubscription: (observation) => {
             if (

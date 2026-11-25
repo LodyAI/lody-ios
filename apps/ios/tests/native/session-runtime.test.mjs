@@ -193,7 +193,15 @@ test(
       items: [{ type: 'text', text: 'Synthetic reply' }],
     });
     const fixture = await openTestSession({
-      target: { backend: 'roost', machineId: 'm1' },
+      target: {
+        backend: 'roost',
+        machineId: 'm1',
+        cloud: { metadata: () => undefined, observe: () => () => {} },
+        getHistoryProof: async (intent) =>
+          intent.cloudHistory ? { state: 'pending' } : 'synthetic-read-proof',
+      },
+      readyWhen: (snapshot) =>
+        snapshot.status === 'live' && snapshot.historySync?.phase === 'pending',
       readSession({ signal }) {
         if (++polls === 1) return controlRead.promise;
         if (polls === 2) return controlRetry.promise;
@@ -253,6 +261,11 @@ test(
       fixture.close();
     });
     assert.equal(fixture.events.at(-1).entries[0].finished, false);
+    assert.deepEqual(fixture.events.at(-1).historySync, {
+      source: 'machine',
+      phase: 'pending',
+      newerVersionPending: false,
+    });
     controlUnavailable = true;
     controlRead.resolve({ ok: false, result: { code: 'network_error' } });
     await controlFailed.promise;

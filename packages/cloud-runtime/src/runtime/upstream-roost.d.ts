@@ -92,6 +92,7 @@ export function createRemoteRoostSessionDataFactory(options: {
     sessionId: string,
   ) => ReturnType<typeof createRoostHistoryReplica>;
   onCloudHistoryRoute?: (active: boolean) => void;
+  onHistorySync?: (state: RoostHistorySyncState) => void;
   accountId?: string | null;
   workspaceId: string;
   machineId: string;
@@ -179,15 +180,34 @@ export function createRemoteRoostSessionDataFactory(options: {
 
 type RoostCloudBinding = { generation: string; ownerPublicKey: string };
 type RoostCloudGrant = {
+  state: 'published';
+  newerVersionPending: boolean;
   binding: RoostCloudBinding;
   streamUrl: string;
   token: string;
   expiresIn: number;
 };
+type RoostCloudReadResult = { state: 'pending' } | RoostCloudGrant;
+
+export type RoostHistorySyncState = {
+  source: 'machine' | 'streams';
+  phase:
+    | 'idle'
+    | 'checking'
+    | 'pending'
+    | 'syncing'
+    | 'ready'
+    | 'retrying'
+    | 'refused';
+  httpStatus?: number;
+  newerVersionPending?: boolean;
+};
 export function roostCloudHistoryBinding(
   meta?: Record<string, unknown>,
 ): RoostCloudBinding | undefined;
-export function parseRoostCloudHistoryGrant(value: unknown): RoostCloudGrant;
+export function parseRoostCloudHistoryReadResult(
+  value: unknown,
+): RoostCloudReadResult;
 export class RoostCloudHistoryRequestError extends Error {
   constructor(status: number);
   readonly status: number;
@@ -201,7 +221,7 @@ export function createRoostHistoryReplica(options: {
   replicaNamespace: string;
   getBinding: () => RoostCloudBinding | undefined;
   observeBinding: (wake: () => void) => () => void;
-  requestGrant: (signal: AbortSignal) => Promise<RoostCloudGrant>;
+  requestGrant: (signal: AbortSignal) => Promise<RoostCloudReadResult>;
   onSyncState?: (state: { checkpoint: string } | { reason: string }) => void;
 }): {
   history: RoostSessionData['history'];

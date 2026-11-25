@@ -343,6 +343,8 @@ test('mobile Roost reads published history when the owner RPC times out', async 
             cloudHistory: true,
           });
           return {
+            state: 'published',
+            newerVersionPending: false,
             binding,
             streamUrl,
             token: 'synthetic-read-grant',

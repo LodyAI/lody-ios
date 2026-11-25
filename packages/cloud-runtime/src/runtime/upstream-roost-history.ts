@@ -1,10 +1,11 @@
 import {
   createRemoteRoostSessionDataFactory,
   createRoostHistoryReplica,
-  parseRoostCloudHistoryGrant,
+  parseRoostCloudHistoryReadResult,
   readSessionHistoryMetadata,
   roostCloudHistoryBinding,
   RoostCloudHistoryRequestError,
+  type RoostHistorySyncState,
 } from './upstream-roost.js';
 import { createRoostHistoryTransport, type RoostWindow } from './roost-history';
 
@@ -32,6 +33,7 @@ type RoostSessionOptions = Parameters<typeof createRoostHistoryTransport>[0] & {
   onSubscription?: (state: { checkpoint: string } | { reason: string }) => void;
   cloud?: MobileRoostCloudHistory;
   onCloudRoute?: (active: boolean) => void;
+  onHistorySync?: (state: RoostHistorySyncState) => void;
 };
 
 export function createMobileRoostSessionData(
@@ -84,7 +86,7 @@ export function createMobileRoostSessionData(
               typeof grant.status === 'number'
             )
               throw new RoostCloudHistoryRequestError(grant.status);
-            return parseRoostCloudHistoryGrant(grant);
+            return parseRoostCloudHistoryReadResult(grant);
           },
           onSyncState: (sync) => {
             if (cloudActive) options.onSubscription?.(sync);
