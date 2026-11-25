@@ -372,7 +372,16 @@ test('mobile Roost reads published history when the owner RPC times out', async 
   }
 });
 
-test('mobile Roost uses an admitted owner during a published Streams grant outage', async (t) => {
+test('mobile Roost uses an admitted owner during a published Streams grant outage on older WebViews', async (t) => {
+  const nativeResolvers = Object.getOwnPropertyDescriptor(
+    Promise,
+    'withResolvers',
+  );
+  delete Promise.withResolvers;
+  t.after(() => {
+    if (nativeResolvers)
+      Object.defineProperty(Promise, 'withResolvers', nativeResolvers);
+  });
   for (const allowed of [true, false]) {
     await t.test(allowed ? 'owner admits' : 'owner refuses', async () => {
       globalThis.indexedDB = new IDBFactory();
