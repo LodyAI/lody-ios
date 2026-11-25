@@ -4,6 +4,7 @@ import UIKit
 final class ChatMarkdownCell: UICollectionViewCell {
   private var markdown: ChatMarkdownView?
   var selectionLabels: [TextLabelView] { markdown?.selectionLabels ?? [] }
+  var tableSelectionGroups: [TextSelectionGroup] { markdown?.tableSelectionGroups ?? [] }
   private let icon = UIImageView()
   private(set) var row: ChatRow?
   private var topInset = ChatRowPadding.content
@@ -93,8 +94,45 @@ final class ChatMarkdownCell: UICollectionViewCell {
   }
 }
 
+/// Forwards a Markdown table's own `TextSelectionGroupDelegate` (Copy as Markdown
+/// and horizontal drag-scroll) while layering the conversation's Quote action.
+@MainActor
+final class ChatTableSelectionDelegate: TextSelectionGroupDelegate {
+  weak var group: TextSelectionGroup?
+  weak var original: (any TextSelectionGroupDelegate)?
+  weak var chat: LodyChatView?
+
+  init(group: TextSelectionGroup, original: (any TextSelectionGroupDelegate)?, chat: LodyChatView) {
+    self.group = group
+    self.original = original
+    self.chat = chat
+  }
+
+  func detach() {
+    if let group, group.delegate === self {
+      group.delegate = original
+    }
+  }
+
+  func textSelectionGroupDidChangeSelection(_ group: TextSelectionGroup) {
+    original?.textSelectionGroupDidChangeSelection(group)
+    chat?.textSelectionGroupDidChangeSelection(group)
+  }
+
+  func textSelectionGroup(_ group: TextSelectionGroup, didDragSelectionIn label: TextLabelView, at location: CGPoint) {
+    original?.textSelectionGroup(group, didDragSelectionIn: label, at: location)
+  }
+
+  func textSelectionGroup(_ group: TextSelectionGroup, editMenuForSuggestedActions suggestedActions: [UIMenuElement]) -> UIMenu? {
+    let base = original?.textSelectionGroup(group, editMenuForSuggestedActions: suggestedActions)
+    let actions = base?.children ?? suggestedActions
+    return chat?.textSelectionGroup(group, editMenuForSuggestedActions: actions) ?? base
+  }
+}
+
 // Only adjacent rendered Markdown rows share a group. Do not silently copy past
-// user bubbles, tools, or unloaded history. Table cells retain their own group.
+// user bubbles, tools, or unloaded history. Table cells keep their own group
+// (for Copy as Markdown and horizontal drag-scroll), proxied here to add Quote.
 extension LodyChatView: TextSelectionGroupDelegate {
   func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
     if !collectionView.visibleCells.contains(where: { $0 === cell }) {
@@ -105,6 +143,7 @@ extension LodyChatView: TextSelectionGroupDelegate {
 
   func refreshMarkdownSelections() {
     var runs: [String: [TextLabelView]] = [:]
+    var visibleTables: [ObjectIdentifier: TextSelectionGroup] = [:]
     var previous: IndexPath?
     var key = ""
     for index in collection.indexPathsForVisibleItems.sorted() {
@@ -114,6 +153,9 @@ extension LodyChatView: TextSelectionGroupDelegate {
         key = row.id
       }
       runs[key, default: []].append(contentsOf: cell.selectionLabels)
+      for group in cell.tableSelectionGroups {
+        visibleTables[ObjectIdentifier(group)] = group
+      }
       previous = index
     }
     // A lone label joins a group of one too, so every agent passage offers Quote in its menu.
@@ -129,12 +171,30 @@ extension LodyChatView: TextSelectionGroupDelegate {
       if !group.labels.elementsEqual(labels, by: ===) { group.labels = labels }
       markdownSelections[key] = group
     }
+    for (id, proxy) in tableSelections where visibleTables[id] == nil {
+      proxy.detach()
+      tableSelections[id] = nil
+    }
+    for (id, group) in visibleTables {
+      if let proxy = tableSelections[id] {
+        if group.delegate !== proxy {
+          if !(group.delegate is ChatTableSelectionDelegate) { proxy.original = group.delegate }
+          group.delegate = proxy
+        }
+      } else {
+        let original = (group.delegate as? ChatTableSelectionDelegate)?.original ?? group.delegate
+        let proxy = ChatTableSelectionDelegate(group: group, original: original, chat: self)
+        group.delegate = proxy
+        tableSelections[id] = proxy
+      }
+    }
   }
 
   /// Litext clears a selection only for taps on its own labels; a tap anywhere else in the
   /// transcript (another row, the gaps between rows) clears it too. Taps on the selection keep it.
   @objc func clearMarkdownSelections(_ tap: UITapGestureRecognizer) {
-    for group in markdownSelections.values where group.hasSelection
+    let groups = Array(markdownSelections.values) + tableSelections.values.compactMap(\.group)
+    for group in groups where group.hasSelection
       && !group.labels.contains(where: { $0.window != nil && $0.selectionContains(tap.location(in: $0)) }) {
       group.clearSelection()
     }

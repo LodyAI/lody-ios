@@ -159,6 +159,23 @@ enum ChatTableViewport {
     return found
   }
 
+  static func selectionGroups(in root: UIView) -> [TextSelectionGroup] {
+    var groups: [TextSelectionGroup] = []
+    var seen = Set<ObjectIdentifier>()
+    func firstGroup(in view: UIView) -> TextSelectionGroup? {
+      if let label = view as? TextLabelView, let group = label.selectionGroup { return group }
+      for subview in view.subviews {
+        if let group = firstGroup(in: subview) { return group }
+      }
+      return nil
+    }
+    for table in tables(in: root) {
+      guard let group = firstGroup(in: table) else { continue }
+      if seen.insert(ObjectIdentifier(group)).inserted { groups.append(group) }
+    }
+    return groups
+  }
+
   static func scroll(in table: UIView) -> UIScrollView? {
     table.subviews.compactMap { $0 as? UIScrollView }.first
   }
