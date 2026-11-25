@@ -30,20 +30,8 @@ extension DataRuntime {
     sink.reject(Self.failure(code, message))
   }
 
-  static let failureCodeKey = "LodyKit.DataRuntime.code"
-
-  static func failure(_ code: String, _ message: String, runtimeCode: String? = nil) -> NSError {
-    NSError(domain: "LodyKit.DataRuntime", code: 1, userInfo: [
-      NSLocalizedDescriptionKey: "\(code): \(message)",
-      failureCodeKey: runtimeCode ?? code,
-    ])
-  }
-
-  /// True only when a write may have reached the runtime or server without a confirmed reply.
-  static func isUncertainWrite(_ error: Error) -> Bool {
-    let ns = error as NSError
-    guard ns.domain == "LodyKit.DataRuntime", let code = ns.userInfo[failureCodeKey] as? String else { return false }
-    return ["timeout", "send_timeout", "runtime_replaced", "runtime_restarted", "invalid_result"].contains(code)
+  static func failure(_ code: String, _ message: String) -> NSError {
+    NSError(domain: "LodyKit.DataRuntime", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(code): \(message)"])
   }
 
   static func scope(_ payload: String) -> [String: Any]? {
@@ -108,9 +96,9 @@ extension DataRuntime {
       return try await channel.call(C.self, params, timeout: timeout)
     } catch let failure as RuntimeFailure {
       switch failure.code {
-      case "timeout": throw Self.failure("send_timeout", String(localized: "native.runtime.sendTimeout", bundle: .lody), runtimeCode: failure.code)
-      case "runtime_replaced": throw Self.failure("runtime_replaced", String(localized: "native.runtime.replaced", bundle: .lody), runtimeCode: failure.code)
-      default: throw Self.failure("command_failed", failure.detail ?? failure.code, runtimeCode: failure.code)
+      case "timeout": throw Self.failure("send_timeout", String(localized: "native.runtime.sendTimeout", bundle: .lody))
+      case "runtime_replaced": throw Self.failure("runtime_replaced", String(localized: "native.runtime.replaced", bundle: .lody))
+      default: throw Self.failure("command_failed", failure.detail ?? failure.code)
       }
     } catch {
       throw Self.failure("command_failed", error.localizedDescription)
