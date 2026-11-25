@@ -1898,6 +1898,14 @@ test('Roost exports the full history before paging and leaves the shared queue o
     finished: false,
     items: [{ type: 'text', text: 'Still running' }],
   };
+  const tail = [
+    ...Array.from({ length: 39 }, (_, index) => ({
+      ...first,
+      id: `recent-${index}`,
+    })),
+    running,
+  ];
+  const history = [first, ...tail];
   const fixture = await openTestSession({
     target: {
       backend: 'roost',
@@ -1915,30 +1923,34 @@ test('Roost exports the full history before paging and leaves the shared queue o
       requests.push({ method: request.method, params });
       const latest = params.query.kind === 'readLatestPage';
       const position = latest ? 1 : 0;
-      const turn = latest ? running : first;
+      const turns = latest ? tail : [first];
       return {
         result: await runtime.sealPayload('s1', {
           type: 'session/history-read_response',
           sessionId: 's1',
           success: true,
           historyRevision: 1,
-          historyCount: 2,
+          historyCount: history.length,
           result:
             params.query.kind === 'readAll'
-              ? [first, running]
+              ? history
               : params.query.kind === 'readRange'
-                ? [first, running]
+                ? history
                     .slice(params.query.from, params.query.to)
                     .map((turn) => ({ state: 'ready', turn }))
                 : {
                     checkpoint: 'c1',
                     startPosition: position,
-                    totalCount: 2,
-                    rows: [{ position, state: 'ready', turnId: turn.id }],
+                    totalCount: history.length,
+                    rows: turns.map((turn, offset) => ({
+                      position: position + offset,
+                      state: 'ready',
+                      turnId: turn.id,
+                    })),
                     hasMoreOlder: latest,
                     cursor: latest ? 'older' : null,
                   },
-          pageTurns: [turn],
+          pageTurns: turns,
         }),
       };
     },
@@ -1946,15 +1958,12 @@ test('Roost exports the full history before paging and leaves the shared queue o
   try {
     assert.deepEqual(
       fixture.events.at(-1).entries.map((entry) => entry.id),
-      ['running'],
+      tail.map((entry) => entry.id),
     );
     assert.equal(fixture.events.at(-1).historyHasMore, true);
     assert.equal(historyStart, 1);
-    assert.deepEqual(await fixture.runtime.readyHistory('s1'), [
-      first,
-      running,
-    ]);
-    const itemId = fixture.events.at(-1).entries[0].items[0].itemId;
+    assert.deepEqual(await fixture.runtime.readyHistory('s1'), history);
+    const itemId = fixture.events.at(-1).entries.at(-1).items[0].itemId;
     assert.equal(
       requests.some((item) => item.params.query?.kind === 'readOlderPage'),
       false,
@@ -1964,16 +1973,16 @@ test('Roost exports the full history before paging and leaves the shared queue o
     const page = await updated;
     assert.deepEqual(
       page.entries.map((entry) => entry.id),
-      ['first', 'running'],
+      history.map((entry) => entry.id),
     );
-    assert.equal(page.entries[1].items[0].itemId, itemId);
+    assert.equal(page.entries.at(-1).items[0].itemId, itemId);
     assert.equal(historyStart, 0);
-    fixture.runtime.closeSession();
+    fixture.runtime.stopSessions();
     const resumed = fixture.nextEmit();
     await fixture.reopen(historyStart);
     assert.deepEqual(
       (await resumed).entries.map((entry) => entry.id),
-      ['first', 'running'],
+      history.map((entry) => entry.id),
     );
     const sent = await fixture.runtime.sendTurn({
       sessionId: 's1',
