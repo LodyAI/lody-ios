@@ -295,6 +295,281 @@ test(
   },
 );
 
+/** A controllable control-stream reader for session `s1`. */
+function controlReads() {
+  const calls = [];
+  let waiting;
+  return {
+    readSession(options) {
+      const reply = Promise.withResolvers();
+      const call = { options, reply: reply.resolve };
+      calls.push(call);
+      waiting?.resolve(call);
+      waiting = undefined;
+      // Deliberately deliver late replies even after the read's signal aborts.
+      return reply.promise;
+    },
+    next() {
+      waiting = Promise.withResolvers();
+      return waiting.promise;
+    },
+    get latest() {
+      return calls.at(-1);
+    },
+  };
+}
+const tail = (nextOffset, bytes) => ({
+  ok: true,
+  result: {
+    nextOffset,
+    upToDate: true,
+    closed: false,
+    ...(bytes ? { payload: { body: frame(bytes) } } : {}),
+  },
+});
+
+test(
+  'foreground wake unconfirms every retained conversation until a read started after the wake reaches the tail',
+  { timeout: 8_000 },
+  async (t) => {
+    const reads = controlReads();
+    const cached = [];
+    let onCached;
+    const fixture = await openTestSession({
+      seedServer(doc) {
+        // A working reply keeps the conversation retained offscreen.
+        doc
+          .getList('history')
+          .push({ id: 'old', role: 'assistant', finished: false, items: [] });
+        doc.commit();
+      },
+      readSession: reads.readSession,
+      onEvent(event) {
+        if (event.type !== 'sessionCache' || event.sessionId !== 's1') return;
+        cached.push(event);
+        onCached?.(event);
+      },
+    });
+    t.after(() => fixture.close());
+    const before = reads.latest ?? (await reads.next());
+    // Another conversation takes the screen; s1 stays retained offscreen.
+    await fixture.runtime.openSession(
+      's2',
+      'w1',
+      async () => ({ token: 'synthetic', gatewayBaseUrl: 'https://x.invalid' }),
+      () => {},
+      async () => {},
+      true,
+    );
+    const awaitCached = (match) =>
+      new Promise((resolve) => {
+        onCached = (event) => {
+          if (match(event)) resolve(event);
+        };
+      });
+
+    const unconfirmed = awaitCached((event) => event.synced === false);
+    fixture.runtime.resumeSessions();
+    assert.equal(before.options.signal.aborted, true);
+    await unconfirmed;
+
+    // A late reply to the read that started before the wake is discarded.
+    const from = fixture.server.version();
+    fixture.server
+      .getList('history')
+      .push({ id: 'stale', role: 'assistant', finished: true, items: [] });
+    fixture.server.commit();
+    const fresh = reads.next();
+    before.reply(tail('2', fixture.server.export({ mode: 'update', from })));
+    const check = await fresh;
+    assert.equal(
+      check.options.live,
+      undefined,
+      'the wake check reads without long-poll so it returns at the tail',
+    );
+
+    const confirmed = awaitCached((event) => event.synced === true);
+    check.reply(tail('1'));
+    const event = await confirmed;
+    assert.deepEqual(
+      JSON.parse(event.session).entries.map((entry) => entry.id),
+      ['old'],
+    );
+  },
+);
+
+test(
+  'a conversation stays unconfirmed while received updates wait for a dependency, and recovery is bounded',
+  { timeout: 8_000 },
+  async (t) => {
+    const reads = controlReads();
+    const offline = Promise.withResolvers();
+    let bootstraps = 0;
+    const fixture = await openTestSession({
+      seedServer(doc) {
+        doc
+          .getList('history')
+          .push({ id: 'old', role: 'assistant', finished: true, items: [] });
+        doc.commit();
+      },
+      beforeBootstrap(url) {
+        if (url.endsWith(':s:s1')) bootstraps++;
+      },
+      readSession: reads.readSession,
+      onEvent(event) {
+        const value = event.session && JSON.parse(event.session);
+        if (value?.status === 'offline') offline.resolve(value);
+      },
+    });
+    t.after(() => fixture.close());
+    const { server } = fixture;
+    const add = (doc, id) => {
+      const from = doc.version();
+      doc
+        .getList('history')
+        .push({ id, role: 'assistant', finished: true, items: [] });
+      doc.commit();
+      return doc.export({ mode: 'update', from });
+    };
+    const flushed = async () => {
+      await fixture.reopen();
+      return fixture.events.at(-1);
+    };
+    let offset = 1;
+    const reply = (bytes) => reads.latest.reply(tail(String(++offset), bytes));
+    const deliver = (bytes) => {
+      const next = reads.next();
+      reply(bytes);
+      return next;
+    };
+
+    // The dependent update arrives first: the transcript is not confirmed.
+    const dependency = add(server, 'dependency');
+    const dependent = add(server, 'dependent');
+    await deliver(dependent);
+    let last = await flushed();
+    assert.equal(last.status, 'syncing');
+    assert.deepEqual(
+      last.entries.map((entry) => entry.id),
+      ['old'],
+    );
+    await deliver(dependency);
+    last = await flushed();
+    assert.equal(last.status, 'live');
+    assert.deepEqual(
+      last.entries.map((entry) => entry.id),
+      ['old', 'dependency', 'dependent'],
+    );
+
+    // An update whose dependency the stream never carries. Later tail reads
+    // carry unrelated updates only.
+    const writer = new LoroDoc();
+    writer.import(server.export({ mode: 'snapshot' }));
+    add(writer, 'never-published');
+    await deliver(add(writer, 'orphan'));
+    await deliver(add(server, 'noise-1'));
+    assert.equal(bootstraps, 1);
+    await deliver(add(server, 'noise-2'));
+    assert.equal(bootstraps, 2, 'the third pending tail read re-bootstraps');
+    assert.equal((await flushed()).status, 'syncing');
+    await deliver(add(server, 'noise-3'));
+    await deliver(add(server, 'noise-4'));
+    reply(add(server, 'noise-5'));
+    const ended = await offline.promise;
+    assert.equal(ended.reason, 'pending_dependencies');
+    assert.equal(bootstraps, 2, 'recovery re-bootstraps only once');
+  },
+);
+
+test(
+  'foreground wake confirms Roost history only after a renewed owner subscription publishes',
+  { timeout: 8_000 },
+  async (t) => {
+    const reads = controlReads();
+    const leases = [];
+    let onLease;
+    const renewedPublication = Promise.withResolvers();
+    const fixture = await openTestSession({
+      target: { backend: 'roost', machineId: 'm1' },
+      readSession: reads.readSession,
+      async *onSubscription(request, runtime, signal) {
+        leases.push(signal);
+        onLease?.();
+        // The owner publishes the renewed lease's checkpoint when the test allows.
+        if (leases.length > 1) await renewedPublication.promise;
+        yield* historyPublications(
+          request,
+          runtime,
+          signal,
+          () =>
+            new Promise((_, reject) =>
+              signal.addEventListener('abort', () => reject(signal.reason), {
+                once: true,
+              }),
+            ),
+        );
+      },
+      async onRpc(request, runtime) {
+        return {
+          result: await runtime.sealPayload('s1', {
+            type: 'session/history-read_response',
+            sessionId: 's1',
+            success: true,
+            historyRevision: 1,
+            historyCount: 1,
+            result: {
+              checkpoint: 'c1',
+              startPosition: 0,
+              totalCount: 1,
+              rows: [{ position: 0, state: 'ready', turnId: 'assistant-1' }],
+              hasMoreOlder: false,
+              cursor: null,
+            },
+            pageTurns: [
+              {
+                id: 'assistant-1',
+                role: 'assistant',
+                timestamp: '2026-01-01T00:00:00Z',
+                finished: false,
+                items: [],
+              },
+            ],
+          }),
+        };
+      },
+    });
+    t.after(() => {
+      renewedPublication.resolve();
+      fixture.close();
+    });
+    const before = reads.latest;
+    assert.equal(leases.length, 1);
+    const renewed = new Promise((resolve) => {
+      onLease = resolve;
+    });
+    fixture.runtime.resumeSessions();
+    assert.equal(fixture.events.at(-1).status, 'syncing');
+    assert.equal(leases[0].aborted, true, 'the wake ends the old lease');
+    await renewed;
+
+    // The control stream reaches the tail; the owner has not yet published
+    // on the renewed lease, so the conversation stays unconfirmed.
+    const fresh = reads.next();
+    before.reply({ ok: false, result: { code: 'cancelled' } });
+    const check = await fresh;
+    const next = reads.next();
+    check.reply(tail('1'));
+    await next;
+    await fixture.reopen();
+    assert.equal(fixture.events.at(-1).status, 'syncing');
+    assert.equal(fixture.events.at(-1).controlReady, true);
+
+    const live = fixture.nextEmit();
+    renewedPublication.resolve();
+    assert.equal((await live).status, 'live');
+  },
+);
+
 test(
   'Roost subscription loss clears live but keeps commands and permission answers on the installed transcript',
   { timeout: 8000 },
