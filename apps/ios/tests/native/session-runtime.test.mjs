@@ -77,6 +77,57 @@ test('an empty session opens on the next 250 ms routing metadata check', async (
   assert.deepEqual(events.at(-1)?.entries, []);
 });
 
+test(
+  'a reopened Loro conversation projects its previously paged window from current history',
+  { timeout: 5000 },
+  async () => {
+    const turn = (index) => ({
+      id: `turn-${index}`,
+      role: 'user',
+      timestamp: '2026-01-01',
+      items: [{ type: 'text', text: `Message ${index}` }],
+    });
+    let historyStart;
+    const fixture = await openTestSession({
+      resolveTarget: () => ({ backend: 'loro' }),
+      onEvent(event) {
+        if (event.type === 'session' && event.synced)
+          historyStart = event.historyStart;
+      },
+      seedServer(doc) {
+        const history = doc.getList('history');
+        for (let index = 0; index < 18; index++) history.push(turn(index));
+        doc.commit();
+      },
+    });
+    try {
+      assert.equal(historyStart, 12);
+      const earlier = fixture.nextEmit();
+      await fixture.runtime.loadOlderSession('s1');
+      assert.equal((await earlier).entries[0].id, 'turn-6');
+      assert.equal(historyStart, 6);
+
+      fixture.runtime.closeSession();
+      const history = fixture.server.getList('history');
+      history.delete(8, 1);
+      history.push(turn(18));
+      fixture.server.commit();
+      const resumed = fixture.nextEmit();
+      await fixture.reopen(historyStart);
+      const snapshot = await resumed;
+      assert.deepEqual(
+        snapshot.entries.map((entry) => entry.id),
+        [6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map(
+          (index) => `turn-${index}`,
+        ),
+      );
+      assert.equal(snapshot.historyHasMore, true);
+    } finally {
+      fixture.close();
+    }
+  },
+);
+
 test('an existing legacy Loro history opens while session metadata is unavailable', async () => {
   const resolveTarget = () => undefined;
   resolveTarget.isCurrent = () => true;
@@ -1832,6 +1883,7 @@ test('Roost proposal outcomes replace the owner turn and preserve its other item
 test('Roost exports the full history before paging and leaves the shared queue on the control document', async () => {
   const requests = [];
   const dispatches = [];
+  let historyStart;
   const first = {
     id: 'first',
     role: 'user',
@@ -1854,6 +1906,10 @@ test('Roost exports the full history before paging and leaves the shared queue o
       dispatchesInput: true,
     },
     markDispatch: async (...args) => dispatches.push(args),
+    onEvent(event) {
+      if (event.type === 'session' && event.synced)
+        historyStart = event.historyStart;
+    },
     async onRpc(request, runtime) {
       const params = await runtime.openPayload(request.params);
       requests.push({ method: request.method, params });
@@ -1893,6 +1949,7 @@ test('Roost exports the full history before paging and leaves the shared queue o
       ['running'],
     );
     assert.equal(fixture.events.at(-1).historyHasMore, true);
+    assert.equal(historyStart, 1);
     assert.deepEqual(await fixture.runtime.readyHistory('s1'), [
       first,
       running,
@@ -1910,6 +1967,14 @@ test('Roost exports the full history before paging and leaves the shared queue o
       ['first', 'running'],
     );
     assert.equal(page.entries[1].items[0].itemId, itemId);
+    assert.equal(historyStart, 0);
+    fixture.runtime.closeSession();
+    const resumed = fixture.nextEmit();
+    await fixture.reopen(historyStart);
+    assert.deepEqual(
+      (await resumed).entries.map((entry) => entry.id),
+      ['first', 'running'],
+    );
     const sent = await fixture.runtime.sendTurn({
       sessionId: 's1',
       machineId: 'm1',
