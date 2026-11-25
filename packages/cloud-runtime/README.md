@@ -39,9 +39,10 @@ selection policy.
 
 The session's metadata selects its history backend. A remote plaintext Roost
 session requests an exact-session Streams grant, including before its metadata
-contains publication fields. Pending publication and a temporary transport
-failure can use the owning machine after a fresh session read admits access. A
-Streams access refusal ends the read route. Streams prepares its first readable
+contains publication fields. Pending publication, a request for machine
+authorization, temporary transport failure, or local replica quota exhaustion
+can use the owning machine after a fresh session read admits access. A Streams
+access refusal ends the read route. Streams prepares its first readable
 window independently during machine admission and while the machine serves
 history. A source switch releases waiting reads to the new source and expires
 former replies and cursors. The sync status shows the selected source and the
