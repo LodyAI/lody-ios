@@ -126,6 +126,7 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   var measurements: [String: (width: CGFloat, text: NSAttributedString, height: CGFloat)] = [:]
   let store = ChatMarkdownStore(traits: .current)
   var markdownSelections: [String: TextSelectionGroup] = [:]
+  var tableSelections: [ObjectIdentifier: ChatTableSelectionDelegate] = [:]
   private lazy var selectionTap = UITapGestureRecognizer(target: self, action: #selector(clearMarkdownSelections(_:)))
   let findBar = ChatFindBar()
   var findPresented = false
@@ -818,6 +819,8 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
     if window == nil {
       for group in markdownSelections.values { group.labels = [] }
       markdownSelections.removeAll()
+      for proxy in tableSelections.values { proxy.detach() }
+      tableSelections.removeAll()
       scrollingToTop = false
       historyPreparation?.cancel(); historyPreparation = nil
       if let handoffID { ChatSendHandoff.cancel(id: handoffID) }
@@ -1055,7 +1058,10 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
     incoming.onComposerOptionChange = old.onComposerOptionChange
     incoming.onDraftChange = old.onDraftChange
     incoming.allowsFullScreen = old.allowsFullScreen
+    incoming.fullScreenContainer = old.fullScreenContainer
     incoming.fullScreenTopInset = old.fullScreenTopInset
+    incoming.inlineTopReservedHeight = old.inlineTopReservedHeight
+    incoming.onBeginEditing = old.onBeginEditing
     // The conversation's run config, not the creation page's, answers the chip from here on.
     incoming.onRunConfig = old.onRunConfig
     incoming.quotesSupported = old.quotesSupported
