@@ -24,7 +24,11 @@ Read before changing login, the data runtime, the offscreen WebView and watchdog
 
 - Catalog and cached-settings recovery compare exact decimal byte offsets and the last snapshot size before preferring a newer snapshot. Failed size hints or oversized/incomplete optional replacements preserve incremental recovery. Frame import yields between 12 ms slices and checks scope cancellation. At most two machine replicas initialize concurrently; metadata and live reads bypass that queue. Catalog publication coalesces bursts over 16 ms and reads the current scope when it flushes.
 - The trusted DataRuntime HTML permits `https:` and `wss:` connections; its other
-  CSP directives remain restrictive. CSP permission alone does not enable the
-  Streams WebSocket transport.
+  CSP directives remain restrictive. The Streams WebSocket (`loro-ds-v1`) is used
+  only when the shared backend config sets `LODY_LORO_STREAMS_WS_ENABLED`, and only
+  for caught-up catalog and Loro session reads through `live-read.ts`; writes and
+  every other read stay on HTTP. With the switch off, reads are unchanged. A
+  WebSocket failure finishes that read over HTTP long-poll from the last confirmed
+  offset; never return bytes past an offset the server has confirmed.
 - The Status view layout and its writes come only from the shared Lody planner vendored verbatim in `packages/cloud-runtime/src/protocol/lody-shared` (hash-checked, golden vectors run in `apps/ios/tests/cloud/status-view.test.mjs`); refresh it from upstream, never edit or reimplement it, and never sort or classify those lists in Swift ([details](../../packages/cloud-runtime/README.md#status-view)).
 - Bundled runtime code must run on the iOS 16.4 WebKit (the deployment target). Every esbuild bundle targets `safari16.4`. A Web API newer than 16.4 is either feature-guarded at its call or polyfilled in `src/runtime/platform-fallbacks.ts`, which installs `AbortSignal.any` (17.4, `abort-signal-any.ts`) and `URL.canParse` (17.0, `url-can-parse.ts`) only where missing. The runtime entry imports it before any other module, and every host document that bundles runtime modules (including Android's) imports it first too; `apps/ios/tests/native/data-runtime.test.mjs` runs catalog sync with both APIs removed.

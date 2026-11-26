@@ -66,6 +66,11 @@ import {
   samePermissionOutcome,
 } from '../protocol/permissionQuestions.ts';
 export { projectSession } from './project';
+import {
+  createTailReader,
+  streamsWebSocket,
+  streamsWebSocketEnabled,
+} from './live-read.ts';
 
 type Grant = { token: string; gatewayBaseUrl: string };
 export type SessionTarget =
@@ -1302,6 +1307,7 @@ export async function openSession(
     if (sessionControlsReady(state)) settleControls(state);
   };
   event('syncing');
+  let tail: ReturnType<typeof createTailReader> | undefined;
   void (async () => {
     try {
       const data = await retrySessionRead(
@@ -1609,6 +1615,16 @@ export async function openSession(
       }
       pages = 0;
       let changed = true;
+      // Without the build switch every read stays exactly as before.
+      const tailReader = async () =>
+        (tail ??= createTailReader(
+          state.client,
+          streamsWebSocket(
+            state.getGrant,
+            (await sessionGrant(state)).gatewayBaseUrl,
+            workspace,
+          ),
+        ));
       while (!controller.signal.aborted) {
         if (upToDate) {
           state.streamReady = true;
@@ -1627,12 +1643,12 @@ export async function openSession(
           () =>
             readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
               livePoll = upToDate && state.streamReady === true;
-              const result = await state.client.readOnce({
-                offset,
-                cursor,
-                signal: controller.signal,
-                ...(livePoll ? { live: 'long-poll' as const } : {}),
-              });
+              const read = { offset, cursor, signal: controller.signal };
+              const result = !livePoll
+                ? await state.client.readOnce(read)
+                : streamsWebSocketEnabled
+                  ? await (await tailReader()).read(read)
+                  : await state.client.readOnce({ ...read, live: 'long-poll' });
               if (!result.ok) throw new Error(result.result.code);
               return result;
             }),
@@ -1653,6 +1669,7 @@ export async function openSession(
           await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
+      tail?.close();
       const failed = error instanceof Error ? error : new Error('sync_failed');
       settleControls(state, failed);
       if (controller.signal.aborted || sessions.get(id) !== state) return;

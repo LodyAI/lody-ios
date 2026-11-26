@@ -1,0 +1,255 @@
+import type {
+  LiveEvent,
+  LiveSubscription,
+  StreamPart,
+  StreamsClient,
+  StreamsClientWebSocketOptions,
+} from '@loro-dev/streams-client';
+
+declare const LODY_MOBILE_STREAMS_WS: boolean;
+
+/** Build-time switch from the shared mobile backend config; off unless explicitly enabled. */
+export const streamsWebSocketEnabled =
+  typeof LODY_MOBILE_STREAMS_WS !== 'undefined' &&
+  LODY_MOBILE_STREAMS_WS === true;
+
+type GrantSource = (() => Promise<{ token: string }>) & {
+  invalidate?: (failedToken?: string) => void;
+};
+
+/**
+ * Pooled `loro-ds-v1` options for one workspace. Every reader in a workspace
+ * shares one socket, authenticated with the workspace Streams grant.
+ */
+export function streamsWebSocket(
+  getGrant: GrantSource,
+  gatewayBaseUrl: string,
+  workspace: string,
+  enabled = streamsWebSocketEnabled,
+): StreamsClientWebSocketOptions | undefined {
+  if (!enabled) return undefined;
+  let last: string | undefined;
+  return {
+    enabled: true,
+    url: gatewayBaseUrl,
+    authPoolKey: `lody-mobile:${workspace}`,
+    auth: async ({ reason }) => {
+      // `reauth` follows a server 4100–4199 close: the cached grant was refused.
+      if (reason === 'reauth') getGrant.invalidate?.(last);
+      last = (await getGrant()).token;
+      return last;
+    },
+  };
+}
+
+type ReadOnceResult = Awaited<ReturnType<StreamsClient['readOnce']>>;
+type LiveClient = Pick<StreamsClient, 'readOnce' | 'live'>;
+export type TailRead = { offset: string; cursor?: string; signal: AbortSignal };
+type Next = IteratorResult<LiveEvent> | 'idle' | 'aborted';
+
+// Type-only SDK imports: test hosts substitute the Streams client module.
+const streamPart = (contentType: string, body: Uint8Array): StreamPart => ({
+  contentType,
+  body,
+  text: () => new TextDecoder().decode(body),
+  json: <T>() => JSON.parse(new TextDecoder().decode(body)) as T,
+});
+
+/** Pushed bytes held before an up-to-date checkpoint, as one long-poll window. */
+const MAX_PENDING_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Caught-up reads with the result shape of `readOnce({live: 'long-poll'})`.
+ *
+ * With WebSocket options, one live subscription follows the requested offset
+ * and returns each up-to-date checkpoint as one window; a quiet `idleMs`
+ * returns an empty up-to-date window, as a long-poll timeout does. Any
+ * WebSocket failure answers that read through HTTP long-poll from the last
+ * returned offset and keeps WebSocket off for a growing cooldown, so the caller's
+ * retry, budget and cursor rules are unchanged. Writes never use this path.
+ */
+export function createTailReader(
+  client: LiveClient,
+  webSocket: StreamsClientWebSocketOptions | undefined,
+  {
+    idleMs = 30_000,
+    cooldownMs = 30_000,
+    now = () => Date.now(),
+  }: { idleMs?: number; cooldownMs?: number; now?: () => number } = {},
+) {
+  let subscription: LiveSubscription | undefined;
+  let stop: (() => void) | undefined;
+  let expected: string | undefined;
+  let pending: Promise<IteratorResult<LiveEvent>> | undefined;
+  let reportedTail = false;
+  let wsOffUntil = 0;
+  let failures = 0;
+  // Consecutive WebSocket failures back off from cooldownMs up to 20×.
+  const coolDown = () => {
+    wsOffUntil = now() + cooldownMs * Math.min(20, 2 ** failures++);
+  };
+
+  const close = () => {
+    stop?.();
+    void subscription?.return?.().catch(() => {});
+    subscription = stop = expected = pending = undefined;
+    reportedTail = false;
+  };
+  const longPoll = (input: TailRead) =>
+    client.readOnce({
+      offset: input.offset,
+      cursor: input.cursor,
+      signal: input.signal,
+      live: 'long-poll',
+    });
+  const fallBack = (input: TailRead) => {
+    close();
+    coolDown();
+    return longPoll(input);
+  };
+  const open = (input: TailRead) => {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    input.signal.addEventListener('abort', abort, { once: true });
+    stop = () => {
+      input.signal.removeEventListener('abort', abort);
+      controller.abort();
+    };
+    subscription = client.live({
+      offset: input.offset,
+      mode: 'ws',
+      signal: controller.signal,
+      webSocket,
+    });
+    expected = input.offset;
+  };
+  // An idle or aborted wait keeps the outstanding `next()` for the next read.
+  const nextEvent = (signal: AbortSignal) => {
+    const current = (pending ??= subscription!.next());
+    return new Promise<Next>((resolve) => {
+      const finish = (value: Next) => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish('idle'), idleMs);
+      const abort = () => finish('aborted');
+      signal.addEventListener('abort', abort, { once: true });
+      current.then(
+        (value) => {
+          if (pending === current) pending = undefined;
+          finish(value);
+        },
+        () => {
+          if (pending === current) pending = undefined;
+          finish({ done: true, value: undefined });
+        },
+      );
+    });
+  };
+
+  async function read(input: TailRead): Promise<ReadOnceResult> {
+    if (!webSocket || now() < wsOffUntil || input.signal.aborted) {
+      if (subscription) close();
+      return longPoll(input);
+    }
+    if (!subscription || expected !== input.offset) {
+      close();
+      try {
+        open(input);
+      } catch {
+        return fallBack(input);
+      }
+    }
+    const chunks: Uint8Array[] = [];
+    let contentType = 'application/octet-stream';
+    let cursor = input.cursor;
+    let nextOffset = input.offset;
+    // The last batch boundary: data events inside a batch keep its start offset.
+    let confirmed = { count: 0, bytes: 0, offset: input.offset, cursor };
+    let received = 0;
+    const window = (upToDate: boolean, closed = false): ReadOnceResult => {
+      const parts = upToDate ? chunks : chunks.slice(0, confirmed.count);
+      const size = parts.reduce((sum, part) => sum + part.length, 0);
+      let body = parts[0];
+      if (parts.length > 1) {
+        body = new Uint8Array(size);
+        let at = 0;
+        for (const part of parts) {
+          body.set(part, at);
+          at += part.length;
+        }
+      }
+      if (!upToDate) ({ offset: nextOffset, cursor } = confirmed);
+      if (upToDate && !closed) {
+        expected = nextOffset;
+        reportedTail = true;
+        failures = 0;
+      } else close();
+      return {
+        ok: true,
+        result: {
+          status: body ? 200 : 204,
+          requestOffset: input.offset,
+          nextOffset,
+          upToDate,
+          closed,
+          ...(cursor === undefined ? {} : { cursor }),
+          payload: body ? streamPart(contentType, body) : null,
+        },
+      };
+    };
+    // A WebSocket failure: return what a batch boundary confirms, else read
+    // over HTTP. Either way WebSocket cools down once.
+    const partial = (input: TailRead) => {
+      if (!confirmed.count) return fallBack(input);
+      coolDown();
+      return window(false);
+    };
+    for (;;) {
+      const next = await nextEvent(input.signal);
+      if (next === 'aborted') {
+        close();
+        return longPoll(input);
+      }
+      if (next === 'idle') {
+        if (!chunks.length) return window(true);
+        return partial(input);
+      }
+      if (next.done) return partial(input);
+      const event = next.value;
+      if (event.type === 'data') {
+        chunks.push(event.payload.body);
+        received += event.payload.body.length;
+        contentType = event.payload.contentType;
+        if (event.cursor !== undefined) cursor = event.cursor;
+        if (event.nextOffset !== nextOffset) {
+          nextOffset = event.nextOffset;
+          confirmed = {
+            count: chunks.length,
+            bytes: confirmed.bytes + received,
+            offset: nextOffset,
+            cursor,
+          };
+          received = 0;
+          if (confirmed.bytes > MAX_PENDING_BYTES) return window(false);
+        }
+      } else if (event.type === 'up_to_date') {
+        nextOffset = event.nextOffset;
+        if (event.cursor !== undefined) cursor = event.cursor;
+        // A checkpoint at an already reported tail carries nothing new.
+        if (!chunks.length && reportedTail && nextOffset === input.offset)
+          continue;
+        return window(true);
+      } else if (event.type === 'eof') {
+        nextOffset = event.nextOffset;
+        return window(true, true);
+      } else if (event.type !== 'reconnected') {
+        // `reconnecting` / `error`: confirmed bytes stay valid; the rest is
+        // read over HTTP from the last confirmed offset.
+        return partial(input);
+      }
+    }
+  }
+  return { read, close };
+}

@@ -28,7 +28,24 @@ Run `pnpm --filter @lody/cloud-runtime typecheck`. Existing behavioral fixtures
 under `apps/ios/tests` now load these shared production sources, retaining
 protocol, write ordering, uncertain delivery and recovery checks.
 
-## Roost sessions
+## Streams WebSocket
+
+`LODY_LORO_STREAMS_WS_ENABLED=1` (or `true`) in the shared mobile backend config
+(`.env.local` or the build environment, same rule as desktop and CLI) builds the
+runtime with `LODY_MOBILE_STREAMS_WS`. It is off by default and does not change the
+storage namespace. When on, caught-up catalog watchers (`:meta`, machine streams,
+the workspace stream) and Loro session reads follow the tail over one pooled
+`loro-ds-v1` socket per workspace, authenticated with the workspace Streams grant;
+a server `reauth` close invalidates that grant first.
+
+`createTailReader` returns each up-to-date checkpoint in the shape of a
+`readOnce({live: 'long-poll'})` result, so the watchers' budgets, cursors and
+retry rules are unchanged; 30 quiet seconds return an empty up-to-date window, as a
+long-poll timeout does. Bytes inside an unfinished batch are never returned past
+the last offset the server confirmed. A dropped socket or error finishes that read
+over HTTP long-poll from that offset and keeps WebSocket off for 30 seconds,
+doubling to 10 minutes while it keeps failing. Appends, bootstrap and catch-up
+reads, machine RPC replies and presence stay on HTTP.
 
 The Developer Mode / Roost History beta preference selects Roost for new sessions
 only when the owner advertises `sessionHistory` v4, using the pinned upstream
