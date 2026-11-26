@@ -70,6 +70,7 @@ import {
   createTailReader,
   streamsWebSocket,
   streamsWebSocketEnabled,
+  streamsWebSocketFor,
 } from './live-read.ts';
 
 type Grant = { token: string; gatewayBaseUrl: string };
@@ -1149,6 +1150,7 @@ export async function clientFor(id: string, getGrant: () => Promise<Grant>) {
   return new StreamsClient({
     url: `${grant.gatewayBaseUrl.replace(/\/$/, '')}/ds/lody/${encodeURIComponent(id)}`,
     auth: async () => (await getGrant()).token,
+    ...streamsWebSocketFor(getGrant, grant.gatewayBaseUrl, id),
     retry: { maxAttempts: 1 },
     // Keep writes within the native command budget; SDK 0.12+ defaults uploads to 60s.
     timeout: {

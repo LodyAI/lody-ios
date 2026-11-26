@@ -42,6 +42,23 @@ export function streamsWebSocket(
   };
 }
 
+/**
+ * Client-level options for a `{workspace}:…` stream: appends use an already
+ * ready pooled socket and otherwise HTTP (the SDK falls back to HTTP only when
+ * the server reports the frame not executed). Undefined while the switch is off.
+ */
+export function streamsWebSocketFor(
+  getGrant: GrantSource,
+  gatewayBaseUrl: string,
+  streamId: string,
+): { webSocket?: StreamsClientWebSocketOptions } {
+  const workspace = /^([A-Za-z0-9_-]{1,128}):/.exec(streamId)?.[1];
+  const webSocket = workspace
+    ? streamsWebSocket(getGrant, gatewayBaseUrl, workspace)
+    : undefined;
+  return webSocket ? { webSocket } : {};
+}
+
 type ReadOnceResult = Awaited<ReturnType<StreamsClient['readOnce']>>;
 type LiveClient = Pick<StreamsClient, 'readOnce' | 'live'>;
 export type TailRead = { offset: string; cursor?: string; signal: AbortSignal };
@@ -54,6 +71,28 @@ const streamPart = (contentType: string, body: Uint8Array): StreamPart => ({
   text: () => new TextDecoder().decode(body),
   json: <T>() => JSON.parse(new TextDecoder().decode(body)) as T,
 });
+
+/**
+ * One read body from WebSocket messages, as HTTP returns it: byte streams
+ * concatenate; JSON streams (Machine RPC replies) are one JSON array.
+ */
+function joinMessages(contentType: string, parts: Uint8Array[]) {
+  const json = /^application\/json\b/i.test(contentType);
+  if (!json && parts.length === 1) return parts[0];
+  const comma = json ? 1 : 0;
+  const size =
+    parts.reduce((sum, part) => sum + part.length + comma, 0) + (json ? 1 : 0);
+  const body = new Uint8Array(size);
+  let at = 0;
+  if (json) body[at++] = 0x5b; // [
+  parts.forEach((part, index) => {
+    if (json && index) body[at++] = 0x2c; // ,
+    body.set(part, at);
+    at += part.length;
+  });
+  if (json) body[at++] = 0x5d; // ]
+  return body;
+}
 
 /** Pushed bytes held before an up-to-date checkpoint, as one long-poll window. */
 const MAX_PENDING_BYTES = 8 * 1024 * 1024;
@@ -89,7 +128,10 @@ export function createTailReader(
     wsOffUntil = now() + cooldownMs * Math.min(20, 2 ** failures++);
   };
 
+  // Ends the read waiting on the subscription, with its idle timer.
+  let interrupt: (() => void) | undefined;
   const close = () => {
+    interrupt?.();
     stop?.();
     void subscription?.return?.().catch(() => {});
     subscription = stop = expected = pending = undefined;
@@ -128,6 +170,7 @@ export function createTailReader(
     const current = (pending ??= subscription!.next());
     return new Promise<Next>((resolve) => {
       const finish = (value: Next) => {
+        if (interrupt === abort) interrupt = undefined;
         clearTimeout(timer);
         signal.removeEventListener('abort', abort);
         resolve(value);
@@ -135,6 +178,7 @@ export function createTailReader(
       const timer = setTimeout(() => finish('idle'), idleMs);
       const abort = () => finish('aborted');
       signal.addEventListener('abort', abort, { once: true });
+      interrupt = abort;
       current.then(
         (value) => {
           if (pending === current) pending = undefined;
@@ -170,16 +214,7 @@ export function createTailReader(
     let received = 0;
     const window = (upToDate: boolean, closed = false): ReadOnceResult => {
       const parts = upToDate ? chunks : chunks.slice(0, confirmed.count);
-      const size = parts.reduce((sum, part) => sum + part.length, 0);
-      let body = parts[0];
-      if (parts.length > 1) {
-        body = new Uint8Array(size);
-        let at = 0;
-        for (const part of parts) {
-          body.set(part, at);
-          at += part.length;
-        }
-      }
+      const body = parts.length ? joinMessages(contentType, parts) : undefined;
       if (!upToDate) ({ offset: nextOffset, cursor } = confirmed);
       if (upToDate && !closed) {
         expected = nextOffset;

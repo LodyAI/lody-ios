@@ -1,5 +1,10 @@
 import { clientFor } from './session';
 import type { StreamError } from '@loro-dev/streams-client';
+import {
+  createTailReader,
+  streamsWebSocket,
+  streamsWebSocketEnabled,
+} from './live-read.ts';
 
 type Grant = () => Promise<{ token: string; gatewayBaseUrl: string }>;
 
@@ -93,6 +98,19 @@ async function appendRequest(args: {
   if (!sent.ok) throw rpcStreamError(sent.result);
 }
 
+/** With the switch on, replies follow the reply stream over the pooled socket. */
+async function replyReader(
+  response: Awaited<ReturnType<typeof clientFor>>,
+  workspaceId: string,
+  grant: Grant,
+) {
+  const { gatewayBaseUrl } = await grant();
+  return createTailReader(
+    response,
+    streamsWebSocket(grant, gatewayBaseUrl, workspaceId),
+  );
+}
+
 function decodeReplies(bytes: Uint8Array): (RpcReply & { id?: string })[] {
   const parsed = JSON.parse(new TextDecoder().decode(bytes));
   return Array.isArray(parsed) ? parsed : [parsed];
@@ -128,32 +146,41 @@ export async function machineRpc(
     grant,
     signal,
   });
-  let offset = '-1';
-  while (!signal.aborted) {
-    const read = await response.readOnce({ offset, live: 'long-poll', signal });
-    if (!read.ok) throw rpcStreamError(read.result);
-    offset = read.result.nextOffset;
-    if (!read.result.payload) continue;
-    for (const reply of decodeReplies(read.result.payload.body)) {
-      if (reply.id !== id) continue;
-      const progress = reply.result as Record<string, unknown> | undefined;
-      if (
-        (progress?.type === 'machine/acp-binary-progress' &&
-          [
-            'machine/acp-capabilities-refresh',
-            'machine/acp-binary-install',
-            'machine/acp-binary-status',
-          ].includes(method)) ||
-        (method === 'machine/acp-authenticate' &&
-          progress?.type === 'machine/acp-authentication-progress')
-      ) {
-        onProgress?.(progress);
-        continue;
+  const tail = streamsWebSocketEnabled
+    ? await replyReader(response, workspaceId, grant)
+    : undefined;
+  try {
+    let offset = '-1';
+    while (!signal.aborted) {
+      const read = tail
+        ? await tail.read({ offset, signal })
+        : await response.readOnce({ offset, live: 'long-poll', signal });
+      if (!read.ok) throw rpcStreamError(read.result);
+      offset = read.result.nextOffset;
+      if (!read.result.payload) continue;
+      for (const reply of decodeReplies(read.result.payload.body)) {
+        if (reply.id !== id) continue;
+        const progress = reply.result as Record<string, unknown> | undefined;
+        if (
+          (progress?.type === 'machine/acp-binary-progress' &&
+            [
+              'machine/acp-capabilities-refresh',
+              'machine/acp-binary-install',
+              'machine/acp-binary-status',
+            ].includes(method)) ||
+          (method === 'machine/acp-authenticate' &&
+            progress?.type === 'machine/acp-authentication-progress')
+        ) {
+          onProgress?.(progress);
+          continue;
+        }
+        return reply;
       }
-      return reply;
     }
+    throw new Error('cancelled');
+  } finally {
+    tail?.close();
   }
-  throw new Error('cancelled');
 }
 
 export async function subscribeMachineHistory(options: {
@@ -190,23 +217,50 @@ export async function subscribeMachineHistory(options: {
       grant,
       signal,
     });
-    for await (const event of response.live({
-      offset: '-1',
-      mode: 'long-poll',
-      signal,
-    })) {
-      signal.throwIfAborted();
-      // Reopen from an owner-confirmed checkpoint after a broken reply stream.
-      if (event.type === 'error' || event.type === 'reconnecting')
-        throw new Error(event.error.code);
-      if (event.type !== 'data') continue;
-      for (const reply of decodeReplies(event.payload.body)) {
-        if (reply.id === id && (await options.onReply(reply))) {
-          closed = true;
-          return;
+    const tail = streamsWebSocketEnabled
+      ? await replyReader(response, workspaceId, grant)
+      : undefined;
+    if (tail) {
+      // Same contract as the long-poll subscription below: a failed read
+      // throws, and the caller reopens from an owner-confirmed checkpoint.
+      try {
+        let offset = '-1';
+        for (;;) {
+          signal.throwIfAborted();
+          const read = await tail.read({ offset, signal });
+          if (!read.ok) throw new Error(read.result.code);
+          offset = read.result.nextOffset;
+          for (const reply of read.result.payload
+            ? decodeReplies(read.result.payload.body)
+            : []) {
+            if (reply.id === id && (await options.onReply(reply))) {
+              closed = true;
+              return;
+            }
+          }
+          if (read.result.closed) break;
+        }
+      } finally {
+        tail.close();
+      }
+    } else
+      for await (const event of response.live({
+        offset: '-1',
+        mode: 'long-poll',
+        signal,
+      })) {
+        signal.throwIfAborted();
+        // Reopen from an owner-confirmed checkpoint after a broken reply stream.
+        if (event.type === 'error' || event.type === 'reconnecting')
+          throw new Error(event.error.code);
+        if (event.type !== 'data') continue;
+        for (const reply of decodeReplies(event.payload.body)) {
+          if (reply.id === id && (await options.onReply(reply))) {
+            closed = true;
+            return;
+          }
         }
       }
-    }
     signal.throwIfAborted();
     throw new Error('history_subscription_closed');
   } finally {

@@ -63,6 +63,7 @@ import {
   createTailReader,
   streamsWebSocket,
   streamsWebSocketEnabled,
+  streamsWebSocketFor,
 } from './live-read.ts';
 const host = (globalThis as any).webkit.messageHandlers.dataRuntime;
 const send = (message: object) => host.postMessage(message);
@@ -563,6 +564,11 @@ function watch(mode: string) {
         const client = new StreamsClient({
           url: `${authorization.gatewayBaseUrl.replace(/\/$/, '')}/ds/lody/${encodeURIComponent(stream)}`,
           auth: async () => (await getGrant()).token,
+          ...streamsWebSocketFor(
+            getGrant,
+            authorization.gatewayBaseUrl,
+            stream,
+          ),
           retry: { maxAttempts: 1 },
           // Keep writes within the native command budget; SDK 0.12+ defaults uploads to 60s.
           timeout: {

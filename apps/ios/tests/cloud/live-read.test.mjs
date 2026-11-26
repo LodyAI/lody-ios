@@ -23,8 +23,11 @@ const settle = async (ready, limit = 200) => {
 };
 
 // Synthetic loro-ds-v1.1 server and HTTP Streams endpoint.
-function streamsPeer() {
+function streamsPeer(peerOptions = {}) {
   const sockets = [];
+  const appends = [];
+  const ephemeral = [];
+  const posts = [];
   const joins = [];
   const joined = [];
   const polls = [];
@@ -54,12 +57,37 @@ function streamsPeer() {
           socket.push({
             type: 'join_ok',
             alias: frame.alias,
-            startOffset: frame.offset,
+            startOffset: frame.offset ?? 0n,
             streamClosed: false,
-            contentType: 'application/octet-stream',
+            contentType: peerOptions.contentType ?? 'application/octet-stream',
           });
-        } else if (frame.type !== 'leave')
-          throw new Error(`unexpected ${frame.type}`);
+        } else if (frame.type === 'append') {
+          appends.push({ socket, frame });
+          if (peerOptions.ack !== false)
+            socket.push({
+              type: 'ack',
+              reqId: frame.reqId,
+              nextOffset: BigInt(peerOptions.ackOffset ?? 20),
+              created: false,
+              duplicate: false,
+            });
+        } else if (frame.type === 'eph_join') {
+          ephemeral.push(frame);
+          socket.push({ type: 'eph_join_ok', alias: frame.alias });
+          if (peerOptions.presence)
+            socket.push({
+              type: 'eph_data',
+              alias: frame.alias,
+              isBootstrap: true,
+              payload: peerOptions.presence(),
+            });
+        } else if (frame.type === 'leave')
+          socket.push({
+            type: 'left',
+            alias: frame.alias,
+            serverInitiated: false,
+          });
+        else throw new Error(`unexpected ${frame.type}`);
       },
       push(frame) {
         const encoded = encodeServerFrame(frame, true);
@@ -111,15 +139,53 @@ function streamsPeer() {
         status: 426,
         headers: { 'Sec-WebSocket-Protocol': 'loro-ds-v1.1' },
       });
-    return new Promise((resolve) => polls.push({ url, resolve }));
+    if (request.method === 'POST') {
+      posts.push({ url, body: await request.text() });
+      return new Response(null, {
+        status: 204,
+        headers: { 'Stream-Next-Offset': at(30) },
+      });
+    }
+    if (request.method === 'PUT')
+      return new Response(null, {
+        status: 201,
+        headers: {
+          'Content-Type': request.headers.get('Content-Type') ?? '',
+          'Stream-Next-Offset': at(0),
+        },
+      });
+    return new Promise((resolve, reject) => {
+      polls.push({ url, resolve });
+      request.signal.addEventListener(
+        'abort',
+        () => reject(request.signal.reason),
+        {
+          once: true,
+        },
+      );
+    });
   };
   const client = new StreamsClient({
     url: STREAM,
     fetch,
     auth: async () => 'synthetic',
     retry: { maxAttempts: 1 },
+    ...(peerOptions.webSocket
+      ? { webSocket: { ...peerOptions.webSocket, webSocketFactory: factory } }
+      : {}),
   });
-  return { client, factory, sockets, joins, joined, polls };
+  return {
+    client,
+    factory,
+    fetch,
+    sockets,
+    joins,
+    joined,
+    polls,
+    appends,
+    ephemeral,
+    posts,
+  };
 }
 const reply = (poll, body, next) =>
   poll.resolve(
@@ -261,4 +327,200 @@ test('a refused WebSocket token invalidates the cached workspace grant', async (
   assert.deepEqual(refused, []);
   assert.equal(await options.auth({ reason: 'reauth' }), 'grant-3');
   assert.deepEqual(refused, ['grant-2']);
+});
+
+test('JSON reply streams arrive as one JSON array, as an HTTP read returns them', async (t) => {
+  const peer = streamsPeer({ contentType: 'application/json' });
+  const webSocket = {
+    ...streamsWebSocket(
+      async () => ({ token: 'synthetic' }),
+      GATEWAY,
+      'w1',
+      true,
+    ),
+    webSocketFactory: peer.factory,
+  };
+  const tail = createTailReader(peer.client, webSocket);
+  t.after(() => tail.close());
+  const read = tail.read({
+    offset: '-1',
+    signal: new AbortController().signal,
+  });
+  await settle(() => peer.joined.length === 1);
+  peer.sockets[0].data(['{"id":"a","result":1}', '{"id":"b","result":2}'], 2);
+  const window = await read;
+  assert.deepEqual(JSON.parse(text(window)), [
+    { id: 'a', result: 1 },
+    { id: 'b', result: 2 },
+  ]);
+});
+
+test('appends use the ready pooled socket, HTTP before it is ready, and never replay an unconfirmed socket append', async (t) => {
+  const options = streamsWebSocket(
+    async () => ({ token: 'synthetic' }),
+    GATEWAY,
+    'w1',
+    true,
+  );
+  const peer = streamsPeer({ webSocket: options, ackOffset: 21 });
+  const part = (body) => ({
+    part: { contentType: 'application/octet-stream', body: bytes(body) },
+  });
+
+  // No socket yet: the write goes over HTTP and opens nothing.
+  const early = await peer.client.append(part('early'));
+  assert.equal(early.ok, true);
+  assert.deepEqual(
+    peer.posts.map((post) => post.body),
+    ['early'],
+  );
+  assert.equal(peer.sockets.length, 0);
+
+  // A caught-up reader holds the workspace socket; the next write uses it.
+  const tail = createTailReader(peer.client, {
+    ...options,
+    webSocketFactory: peer.factory,
+  });
+  const reading = new AbortController();
+  t.after(() => {
+    reading.abort();
+    tail.close();
+  });
+  void tail.read({ offset: at(5), signal: reading.signal });
+  await settle(() => peer.joined.length === 1);
+  const pushed = await peer.client.append(part('pushed'));
+  assert.equal(pushed.ok, true);
+  assert.equal(pushed.result.nextOffset, at(21));
+  assert.equal(
+    new TextDecoder().decode(peer.appends[0].frame.payload),
+    'pushed',
+  );
+  assert.equal(peer.appends[0].frame.stream, 'lody/w1:meta');
+  assert.equal(peer.posts.length, 1, 'no HTTP write once the socket is ready');
+
+  // The socket drops after the frame was sent: the outcome is unknown, so it
+  // is reported, never re-sent over HTTP.
+  peer.sockets[0].onmessage = null;
+  const lost = peer.client.append(part('lost'));
+  await settle(() => peer.appends.length === 2);
+  peer.sockets[0].drop();
+  const outcome = await lost;
+  assert.equal(outcome.ok, false);
+  assert.equal(peer.posts.length, 1);
+});
+
+// A production runtime module, built with the switch on.
+async function withWebSocket(entry) {
+  const { build } = await import('esbuild');
+  const root = new URL('../../../../', import.meta.url).pathname;
+  const result = await build({
+    absWorkingDir: root,
+    entryPoints: [`packages/cloud-runtime/src/runtime/${entry}`],
+    bundle: true,
+    packages: 'external',
+    format: 'esm',
+    platform: 'node',
+    write: false,
+    define: { LODY_MOBILE_STREAMS_WS: 'true' },
+  });
+  const { mkdir, rm, writeFile } = await import('node:fs/promises');
+  const dir = `${root}node_modules/.cache/lody-ios-tests`;
+  await mkdir(dir, { recursive: true });
+  const file = `${dir}/${entry}-ws-${process.pid}.mjs`;
+  await writeFile(file, result.outputFiles[0].text);
+  try {
+    return await import(file);
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
+test('Machine RPC replies arrive over the workspace socket with the switch on', async (t) => {
+  const { machineRpc } = await withWebSocket('machine-rpc.ts');
+  const peer = streamsPeer({ contentType: 'application/json' });
+  const previous = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket };
+  globalThis.fetch = peer.fetch;
+  globalThis.WebSocket = function (url, protocols) {
+    return peer.factory(url, { protocols });
+  };
+  const signal = new AbortController();
+  t.after(() => {
+    signal.abort();
+    Object.assign(globalThis, previous);
+  });
+  const reply = machineRpc(
+    'w1',
+    'm1',
+    'machine/ping',
+    {},
+    async () => ({ token: 'synthetic', gatewayBaseUrl: GATEWAY }),
+    signal.signal,
+    undefined,
+    30_000,
+    'rpc-1',
+  );
+  await settle(() => peer.joined.length === 1);
+  assert.match(peer.joins[0].stream, /^lody\/w1:rpc:res:m1:/);
+  assert.equal(JSON.parse(peer.posts[0].body).id, 'rpc-1');
+  peer.sockets[0].data(
+    [
+      '{"id":"other","result":0}',
+      '{"jsonrpc":"2.0","id":"rpc-1","result":{"pong":true}}',
+    ],
+    2,
+  );
+  assert.deepEqual((await reply).result, { pong: true });
+  assert.equal(peer.polls.length, 0, 'the reply never needed long-poll');
+});
+
+test('machine presence is read over the workspace socket and publishes nothing', async (t) => {
+  const { watchMachinePresence } = await withWebSocket('machine-presence.ts');
+  const { EphemeralStore } = await import('loro-crdt');
+  const peer = streamsPeer({
+    presence: () => {
+      const store = new EphemeralStore(90_000);
+      store.set('machine-m1', {
+        kind: 'machine',
+        machineId: 'm1',
+        instanceId: 'i1',
+        updatedAt: Date.now(),
+      });
+      const bytes = store.encodeAll();
+      store.destroy();
+      return bytes;
+    },
+  });
+  const previous = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket };
+  globalThis.fetch = peer.fetch;
+  globalThis.WebSocket = function (url, protocols) {
+    return peer.factory(url, { protocols });
+  };
+  const published = [];
+  const stop = watchMachinePresence(
+    'w1',
+    async () => ({
+      token: 'synthetic',
+      gatewayBaseUrl: GATEWAY,
+      // HTTP presence would use the shard host; the socket stays on the gateway.
+      shardHostSuffix: 'shard.invalid',
+    }),
+    (value) => published.push(value),
+  );
+  t.after(() => {
+    stop();
+    Object.assign(globalThis, previous);
+  });
+  await settle(() => published.at(-1)?.state === 'live', 400);
+  assert.deepEqual(published.at(-1), {
+    state: 'live',
+    onlineMachineIds: ['m1'],
+  });
+  assert.equal(new URL(peer.sockets[0].url).host, new URL(GATEWAY).host);
+  assert.equal(peer.ephemeral.length, 1);
+  assert.equal(peer.ephemeral[0].channel, 'presence');
+  assert.equal(peer.ephemeral[0].stream, 'lody/w1:meta');
+  assert.equal(peer.polls.length, 0, 'no HTTP presence subscription');
+  // Stopping presence releases the pooled socket.
+  stop();
+  await settle(() => peer.sockets[0].closed, 400);
 });
