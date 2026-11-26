@@ -79,8 +79,8 @@ importers:
         specifier: 0.5.0
         version: 0.5.0
       '@loro-dev/roost':
-        specifier: 0.3.1
-        version: 0.3.1
+        specifier: 0.3.2
+        version: 0.3.2(effect@4.0.2)
       '@loro-dev/streams-client':
         specifier: 0.13.1
         version: 0.13.1(effect@4.0.2)
@@ -459,8 +459,8 @@ packages:
     resolution: {integrity: sha512-gfjAXSd/OewCCH1wVnOhmFdXD40p0ZPGHfGW/tIxBvqO+qcvtdH37QTYWi4PQdKXMHHH7jfGXX4Oitguf+0pkg==}
     engines: {node: '>=18'}
 
-  '@loro-dev/roost@0.3.1':
-    resolution: {integrity: sha512-VRSTom29ER5X6UDzzd4jAZrhUtdQF+4v2YFH7nW5E4CUOEiy4BFVgzYuyNlb3YISr7UGwAQ4rKe6c1JVgr5QIQ==}
+  '@loro-dev/roost@0.3.2':
+    resolution: {integrity: sha512-uRFPkyiu0b/eyj/3gehTSqjY1RY5jivB0QUBa02Zu9VE2xivVBlNJ0QvilzuSwygtgHwW68G/lw3wQNklBNcog==}
 
   '@loro-dev/streams-client@0.13.1':
     resolution: {integrity: sha512-qOyKNzKpXcOI4DcXJQX7Vzrf4T175ji//qosHyfVXkLY2X0M0qOD0VfaKFwTdlwEeUw5UmgohiNn2Os4AVx4BQ==}
@@ -471,9 +471,14 @@ packages:
       effect:
         optional: true
 
-  '@loro-dev/streams-client@0.8.0':
-    resolution: {integrity: sha512-ILqMGzgIOp8xpfi5oAVdNEm+ldbM5xjdDotkfkc/MI8dziby9yPL29qGWcjeNCwnDTAyseJadgATzWI7M0Thlw==}
+  '@loro-dev/streams-client@0.16.0':
+    resolution: {integrity: sha512-+NWjig5iZ0FamC6dtdVwHUy0cr1VZZVvj6xWR98yCKjrBNk5mL1Q/SgzJo1FKhpwpDy0LkdLVXUwshg6H8ZsAA==}
     engines: {node: '>=18'}
+    peerDependencies:
+      effect: 4.0.2
+    peerDependenciesMeta:
+      effect:
+        optional: true
 
   '@loro-dev/streams-crdt@0.21.1':
     resolution: {integrity: sha512-4ATQh1/2cLVzTkSS4D1tbhrtaY3Nbd+RSqp90IvTCU6Up4CWtiGmiDxD/YJMSV1O3fOfQ9nLGbvy8Ijb+33DHA==}
@@ -1222,17 +1227,21 @@ snapshots:
 
   '@loro-dev/flock-wasm@0.5.0': {}
 
-  '@loro-dev/roost@0.3.1':
+  '@loro-dev/roost@0.3.2(effect@4.0.2)':
     dependencies:
-      '@loro-dev/streams-client': 0.8.0
+      '@loro-dev/streams-client': 0.16.0(effect@4.0.2)
       '@noble/curves': 2.4.0
       '@noble/hashes': 2.4.0
+    transitivePeerDependencies:
+      - effect
 
   '@loro-dev/streams-client@0.13.1(effect@4.0.2)':
     optionalDependencies:
       effect: 4.0.2
 
-  '@loro-dev/streams-client@0.8.0': {}
+  '@loro-dev/streams-client@0.16.0(effect@4.0.2)':
+    optionalDependencies:
+      effect: 4.0.2
 
   '@loro-dev/streams-crdt@0.21.1(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)':
     dependencies:

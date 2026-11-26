@@ -18,6 +18,7 @@ provenance. Keep
 the three browser export selectors (`entry.ts`, `shared-entry.ts`, `session-data.ts`)
 local; they select public APIs without implementing Roost behavior.
 
-Run `node scripts/build-upstream-roost.mjs` to regenerate the runtime module.
+The runtime bundle uses the published `@loro-dev/roost@0.3.2` SDK for framed
+Streams reads. Run `node scripts/build-upstream-roost.mjs` to regenerate the runtime module.
 The iOS asset build verifies the module. Android's runtime snapshot carries
 the verified browser module and its license files.

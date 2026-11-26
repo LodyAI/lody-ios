@@ -263,14 +263,13 @@ test('mobile Roost opens published history without a metadata hint or an owner r
         headers: { ...headers, 'stream-next-offset': '0' },
       });
     if (url.searchParams.get('direction') === 'backward')
-      return new Response(new Uint8Array(), {
+      return new Response(Uint8Array.of(1), {
         headers: {
-          ...headers,
-          'stream-prev-offset': '0',
-          'stream-end-offset': '0',
-          'stream-tail-offset': '0',
+          'content-type': 'application/vnd.loro-streams.frames',
+          'stream-prev-offset': '0'.repeat(20),
+          'stream-end-offset': '0'.repeat(20),
           'stream-at-start': 'true',
-          'stream-message-spans': '[]',
+          'stream-at-retained-start': 'true',
         },
       });
     if (url.searchParams.has('live')) {

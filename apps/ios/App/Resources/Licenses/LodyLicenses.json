@@ -28,7 +28,7 @@
     },
     {
       "name": "@loro-dev/roost",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "license": "MIT",
       "text": 4
     },
@@ -40,8 +40,8 @@
       "text": 4
     },
     {
-      "name": "@loro-dev/streams-client@0.8.0",
-      "version": "0.8.0",
+      "name": "@loro-dev/streams-client@0.16.0",
+      "version": "0.16.0",
       "license": "MIT",
       "url": "https://github.com/loro-dev/loro-streams",
       "text": 4
