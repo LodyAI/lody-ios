@@ -552,13 +552,20 @@ export async function actOnPendingInput(
   }
   const owner = acceptedInputs;
   if (!owner) throw new Error('session_not_ready');
+  if (action === 'forget') {
+    // Cancellation searches the owner's durable storage itself, as Web does. An
+    // input the owner never saved (a queued Roost send, or a handoff lost before
+    // enqueue) leaves only the native Outbox record, which the caller removes.
+    await owner.cancel(inputId);
+    if (owner !== acceptedInputs) throw new Error('session_not_ready');
+    return { state: 'pending' as const };
+  }
   await owner.refresh();
   const input = owner
     .getSnapshot()
     .find((send) => send.sessionId === sessionId && send.id === inputId);
   if (!input || owner !== acceptedInputs) throw new Error('session_not_ready');
-  if (action === 'forget') await owner.cancel(inputId);
-  else if (input.error) owner.retry(inputId);
+  if (input.error) owner.retry(inputId);
   return { state: 'pending' as const };
 }
 
