@@ -32,6 +32,18 @@ def ordered(*ids):
     ui.wait(in_order, f'Expected row order {ids}')
 
 
+header = ui.element('label:settled')
+ui.axe('tap', '-x', str(header['frame']['x'] + header['frame']['width'] / 2), '-y', str(y(header)))
+row = ui.element('settled-a')
+width = row['frame']['width']
+ui.axe('drag', '--start-x', str(width * .72), '--start-y', str(y(row)),
+       '--end-x', str(width * .26), '--end-y', str(y(row)), '--duration', '.4')
+action(catalog.text('session.action.archive'))
+focus = action(catalog.text('home.status.focus'))
+ui.capture('settled-swipe')
+ui.axe('tap', '-x', str(focus['frame']['x'] + focus['frame']['width'] / 2), '-y', str(y(focus)))
+ordered('label:focus', 'settled-a', 'label:later')
+
 ordered('focus-woken', 'focus-a')
 drag('focus-a', 'focus-woken', .12)
 ordered('label:focus', 'focus-a', 'focus-woken')
