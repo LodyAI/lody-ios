@@ -14,7 +14,7 @@ def y(node, fraction=.5):
 
 
 def action(title):
-    return ui.wait(lambda items: next((node for node in items if node.get('AXLabel') == title
+    return ui.wait(lambda items: next((node for node in items if node.get('type') == 'Button' and node.get('AXLabel') == title
                                         and not node.get('AXUniqueId')), None), f'Missing {title}')
 
 
