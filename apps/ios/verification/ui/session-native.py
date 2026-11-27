@@ -43,6 +43,19 @@ def tap_menu_item(title):
     ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] + frame['height'] / 2), '--post-delay', '.6')
 
 
+def check_reconnect():
+    wait_probe('offline', 'Offline scenario did not start')
+    status = ui.element('chat-overlay-status')
+    assert status.get('AXLabel') == catalog.text('native.chat.connection.paused'), 'The reconnect button should show only the connection status'
+    ui.capture('offline')
+    ui.axe('tap', '--id', 'chat-overlay-status', '--post-delay', '.5')
+    wait_probe('reconnect', 'Reconnect did not reach the session feed')
+    wait_text('Live reply with a needle')
+    ui.wait(lambda items: not any(i.get('AXUniqueId') == 'chat-overlay-status' for i in items),
+            'Pending history sync should not show a floating status on a connected conversation')
+    ui.capture('reconnected')
+
+
 def check_archive():
     tap_label(more)
     tap_label(catalog.text('session.action.archive'))
@@ -75,6 +88,11 @@ def check_archive():
 if os.environ.get("LODY_VERIFY_SESSION_ARCHIVE_ONLY") == "1":
     wait_probe("live", "Archive scenario did not start")
     check_archive()
+    sys.exit(0)
+
+if os.environ.get('LODY_VERIFY_SESSION_RECONNECT_ONLY') == '1':
+    check_reconnect()
+    print('PASS: reconnect works and pending history sync does not show a floating status.')
     sys.exit(0)
 
 
@@ -215,12 +233,7 @@ ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] +
 ui.wait(lambda items: not any(i.get('AXUniqueId') == 'session-preview-probe' for i in items), 'Deleted session page did not return', timeout=10)
 
 ui.open_case('session-preview-offline')
-wait_probe('offline', 'Offline scenario did not start')
-ui.element('chat-overlay-status')
-ui.capture('offline')
-ui.axe('tap', '--id', 'chat-overlay-status', '--post-delay', '.5')
-wait_probe('reconnect', 'Reconnect did not reach the session feed')
-wait_text('Live reply with a needle')
+check_reconnect()
 
 ui.open_case('session-preview-find')
 ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-find-field' and 'needle' in (i.get('AXValue') or '') for i in items), 'Find query did not open the find bar')

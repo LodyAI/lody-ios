@@ -45,7 +45,8 @@ PREVIEW = {
     'role-mention-chat': 'mention-chat',
     'role-mention-sheet': 'mention-sheet',
     'agent-roles': 'agent-roles-preview',
-    'session-native': 'session-preview-live',
+    'session-native': ('session-preview-offline' if os.environ.get('LODY_VERIFY_SESSION_RECONNECT_ONLY') == '1'
+                       else 'session-preview-live'),
     'dictation': 'session-preview-live',
     'proposal-cards': 'session-preview-cards-role-create',
     'session-simulator': 'session-preview-simulator',

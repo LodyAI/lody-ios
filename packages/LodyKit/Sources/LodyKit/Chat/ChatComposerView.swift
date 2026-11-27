@@ -34,7 +34,6 @@ private struct ChatComposerState: Decodable {
   var quotaNotice: String?
   var reconnect = false
   var connection: String?
-  var historySyncLabel: String?
   var placeholder = String(localized: "native.chat.composer.placeholder", bundle: .lody)
 }
 
@@ -1733,7 +1732,6 @@ final class ChatComposerView: UIView, UITextViewDelegate {
     }
   }
   var connection: String { state.connection ?? "" }
-  var historySyncLabel: String? { state.historySyncLabel }
 
   private(set) var suppressesComposer = false
 
