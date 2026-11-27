@@ -14,7 +14,7 @@ Read before changing login, the data runtime, the offscreen WebView and watchdog
 
 - The host overlaps the first Streams grant request with local WebView loading. A prefetched result belongs to that view only and its remaining lifetime is checked on handoff. Only short-lived workspace Streams grants and scoped machine request proofs enter the bundled WebView; long-lived Better Auth credentials stay in Keychain. Never load remote scripts or expose tokens in diagnostics. Logout and unsubscribe must stop the owned runtime.
 
-- Explicit removal of a Loro pending message clears only its native Outbox record and does not require Roost accepted-input state. Preserve account/workspace and exact-input guards; local removal never claims to cancel remote execution. Roost removal continues through its pending-input owner.
+- Explicit removal of a Loro pending message clears only its native Outbox record and does not require Roost accepted-input state. Preserve account/workspace and exact-input guards; local removal never claims to cancel remote execution. Roost removal cancels through its pending-input owner, which searches its durable storage; an input the owner never saved, such as a queued send or a handoff lost before enqueue, still clears its native Outbox record.
 
 - Explicit Loro handoff recovery first reads fresh server history for the exact input, then reuses the owner's deduplicated dispatch RPC with its persisted configuration. Never re-append the message, rewrite a newer dispatch pointer, revive a terminal/missing-history input, or infer execution from a delivery ACK. Readback failure keeps the Outbox record actionable; local removal and scope changes fence later recovery stages.
 

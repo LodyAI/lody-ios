@@ -1389,6 +1389,7 @@ test(
   { timeout: 5000 },
   async () => {
     let handoffStarted, bootstrapStarted;
+    let historyWrites = 0;
     const handoff = new Promise((resolve) => {
       handoffStarted = resolve;
     });
@@ -1404,6 +1405,7 @@ test(
       },
       async onRpc(request, runtime) {
         if (request.method === 'session/history-write') {
+          historyWrites += 1;
           handoffStarted();
           throw new Error('lost_ack');
         }
@@ -1449,10 +1451,18 @@ test(
       fixture.runtime.resumeAcceptedInputs();
       await bootstrap;
       await fixture.runtime.actOnPendingInput('s1', send.id, 'forget');
+      const writes = historyWrites;
+      // Removal is idempotent: a second tap, or an input the owner never saved
+      // (a queued send or a handoff lost before enqueue), clears only the native
+      // Outbox record and never revives or dispatches the input.
+      await fixture.runtime.actOnPendingInput('s1', send.id, 'forget');
+      const unsaved = '00000000-0000-4000-8000-0000000000aa';
+      await fixture.runtime.actOnPendingInput('s1', unsaved, 'forget');
       await assert.rejects(
-        fixture.runtime.actOnPendingInput('s1', send.id, 'forget'),
+        fixture.runtime.actOnPendingInput('s1', unsaved, 'retry'),
         /session_not_ready/,
       );
+      assert.equal(historyWrites, writes);
       assert.deepEqual(fixture.runtime.reservedSessionIds(), []);
     } finally {
       fixture.close();
