@@ -217,7 +217,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
 
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
-    #if DEBUG
+    #if DEBUG || targetEnvironment(simulator)
     if LodyUIVerify.enabled, let coordinator = transitionCoordinator ?? parent?.transitionCoordinator,
        coordinator.isInteractive {
       let probe = SessionHeaderTransitionProbe(page: view, controls: [backButton, chat.titleButton, moreButton], coordinator: coordinator)
@@ -821,8 +821,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   }
 }
 
-#if DEBUG
+#if DEBUG || targetEnvironment(simulator)
 /// Offline UI evidence uses only owned views and public presentation-layer coordinates.
+/// The navigation suite also runs against the signed Release Simulator build.
 @MainActor private final class SessionHeaderTransitionProbe: NSObject {
   private weak var page: UIView?
   private let controls: [UIView]
