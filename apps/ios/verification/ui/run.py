@@ -677,8 +677,11 @@ try:
                     # Long search and mention-kind loops reach ~290s alone.
                     check_timeout = 420
                 elif case == 'session-native':
-                    # Shared-feed actions, native sheets and repeated AX captures on a cold CI simulator.
-                    check_timeout = 600
+                    # Shared-feed actions and AX captures can reach the old 600s budget before owner and reconnect checks.
+                    check_timeout = 720
+                elif case == 'create-parity':
+                    # Inline run configuration and project-picker captures take about 150s locally.
+                    check_timeout = 300
                 elif case == 'proposal-cards':
                     # Seven proposal scenes with captures and navigation.
                     check_timeout = 420

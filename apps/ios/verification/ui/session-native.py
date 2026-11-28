@@ -2,6 +2,7 @@
 import sys
 import os
 import subprocess
+import time
 from driver import UI
 import catalog
 
@@ -27,28 +28,29 @@ def wait_text(text):
 
 
 def wait_clipboard(text):
-    ui.wait(lambda _: subprocess.check_output(['xcrun', 'simctl', 'pbpaste', ui.udid], text=True).strip() == text,
-            f'Clipboard did not receive {text}')
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        copied = subprocess.check_output(['xcrun', 'simctl', 'pbpaste', ui.udid], text=True, timeout=10).strip()
+        if copied == text:
+            return
+        time.sleep(.2)
+    raise AssertionError(f'Clipboard did not receive {text}')
 
 
 def tap_label(label, post_delay='.6'):
-    ui.wait(lambda items: any(i.get('AXLabel') == label for i in items), f'Missing {label}')
-    ui.axe('tap', '--label', label, '--post-delay', post_delay)
-
-
-def tap_frame(frame):
-    ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] + frame['height'] / 2), '--post-delay', '.6')
+    item = ui.wait(lambda items: next((i for i in items if i.get('AXLabel') == label), None), f'Missing {label}')
+    ui.tap_frame(item['frame'], post_delay=post_delay)
 
 
 def tap_back():
     back = next(item for item in reversed(ui.state()) if item.get('AXUniqueId') == 'BackButton')
-    tap_frame(back['frame'])
+    ui.tap_frame(back['frame'], post_delay='.6')
 
 
 def tap_menu_item(title):
     # Menu items with a subtitle expose "title, subtitle" as one label.
     item = ui.wait(lambda items: next((i for i in items if (i.get('AXLabel') or '').startswith(title)), None), f'Missing {title}')
-    tap_frame(item['frame'])
+    ui.tap_frame(item['frame'], post_delay='.6')
 
 
 def check_archive():
@@ -149,7 +151,6 @@ assert probe().split(',').count('watch') == 1
 chip = ui.element('session-preview')['frame']
 x, y = chip['x'] + chip['width'] / 2, chip['y'] + chip['height'] / 2
 ui.axe('touch', '-x', str(x), '-y', str(y), '--down')
-import time
 time.sleep(.7)
 ui.axe('touch', '-x', str(x), '-y', str(y), '--up')
 tap_label(catalog.text('session.preview.copyLink'))
