@@ -98,6 +98,16 @@ extension SessionController {
 
   /// A computer that catches up, comes online or a runtime that becomes ready changes the
   /// creation options; the composer reads them again while its last read was incomplete.
+  func observeAgentRoles() -> NSObjectProtocol {
+    NotificationCenter.default.addObserver(forName: .lodyRolesChanged, object: nil, queue: .main) { [weak self] note in
+      let eventScope = note.userInfo?["scopeKey"] as? String
+      MainActor.assumeIsolated {
+        guard let self, eventScope == self.source.state.key else { return }
+        self.composerModel.rolesChanged()
+      }
+    }
+  }
+
   func observeCreationOptions() -> NSObjectProtocol {
     NotificationCenter.default.addObserver(forName: .lodyDataRuntimeEvent, object: nil, queue: .main) { [weak self] note in
       let optionsChanged = note.userInfo?["creationOptionsChanged"] as? Bool == true

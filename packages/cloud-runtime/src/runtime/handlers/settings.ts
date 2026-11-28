@@ -231,7 +231,23 @@ export function registerSettings(ctx: RuntimeContext) {
         : undefined,
     );
   });
+  async function waitMetaCatchUp() {
+    const wait = state.unhealthy.has('meta')
+      ? state.catchingUp?.get('meta')
+      : undefined;
+    if (!wait) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      wait,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 3000);
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+  }
   channel.handle('agentRoles', async (args) => {
+    if (args.action === 'list' && args.workspaceId === state.workspace)
+      await waitMetaCatchUp();
     const { flock, check, scopedGrant } = replicaScope(args);
     const machines = new Map(
       [...state.machineReplicas].filter(([id]) => !state.unhealthy.has(id)),

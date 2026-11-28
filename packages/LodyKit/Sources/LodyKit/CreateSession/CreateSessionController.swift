@@ -8,11 +8,13 @@ final class CreateSessionController: UIViewController, UIGestureRecognizerDelega
   var form = CreateSessionForm()
   var loadCachedOptions: (() async -> CreationOptions?)?
   var loadOptions: (() async throws -> CreationOptions)?
+  var loadCachedRoles: (() async -> [RuntimeContract.AgentRoleItem]?)?
   /// The workspace's Agent Roles; the run config shows no Role row until they are listed.
   var loadRoles: (() async throws -> [RuntimeContract.AgentRoleItem])?
   var loadProjectGroups: (() async throws -> [RuntimeContract.ProjectGroupItem])?
   private var groupsTask: Task<Void, Never>?
-  private var rolesTask: Task<Void, Never>?
+  private(set) var rolesTask: Task<Void, Never>?
+  private(set) var rolesLoaded = false
   var loadRepositories: (() async throws -> [CreateProject])?
   var loadCachedBranches: ((_ repo: String) async -> CreateBranches?)?
   var loadBranches: ((_ repo: String, _ page: Int) async throws -> CreateBranches)?
@@ -52,6 +54,8 @@ final class CreateSessionController: UIViewController, UIGestureRecognizerDelega
   isolated deinit {
     branchTask?.cancel()
     optionsTask?.cancel()
+    rolesTask?.cancel()
+    groupsTask?.cancel()
 #if !LODY_SHARE_EXTENSION
     if let catalogObserver { NotificationCenter.default.removeObserver(catalogObserver) }
 #endif
@@ -88,7 +92,11 @@ final class CreateSessionController: UIViewController, UIGestureRecognizerDelega
     dismissKeyboard.delegate = self
     view.addGestureRecognizer(dismissKeyboard)
     panelState.onPick = { [weak self] id, option in self?.optionPicked(id, option) }
-    panelState.onRetry = { [weak self] in self?.load() }
+    panelState.onRetry = { [weak self] in
+      guard let self else { return }
+      self.load()
+      if !self.rolesLoaded { self.loadAgentRoles() }
+    }
     panelState.onWorktree = { [weak self] on in
       guard let self, !self.sending else { return }
       self.form.current.worktree = on
@@ -448,11 +456,21 @@ final class CreateSessionController: UIViewController, UIGestureRecognizerDelega
     }
   }
 
-  /// Roles are read once per page; a failure simply leaves the Role row out.
-  private func loadAgentRoles() {
+  /// Restores cached Roles for immediate display, then reads live Roles; a failure retains any
+  /// cached list and remains retryable when the runtime catches up or emits `agentRolesChanged`.
+  func loadAgentRoles() {
+    guard !sending else { return }
     rolesTask?.cancel()
     rolesTask = Task { [weak self] in
+      if let self, self.form.roles == nil, let cached = await self.loadCachedRoles?() {
+        guard !Task.isCancelled else { return }
+        if self.form.roles == nil {
+          self.form.roles = cached
+          self.render()
+        }
+      }
       guard let roles = try? await self?.loadRoles?(), let self, !Task.isCancelled else { return }
+      self.rolesLoaded = true
       self.form.roles = roles
       self.render()
     }

@@ -6,6 +6,7 @@ struct SessionComposerService {
   /// A nil project reads the workspace-wide options (plain chats have no catalog project).
   var options: @MainActor (_ workspaceId: String, _ projectId: String?) async throws -> CreationOptions
   var tier: @MainActor (_ workspaceId: String, _ userId: String) async -> String?
+  var cachedRoles: @MainActor (_ workspaceId: String) async -> [RuntimeContract.AgentRoleItem]? = { _ in nil }
   /// Agent Roles readable by this user (runtime `agentRoles` list).
   var roles: @MainActor (_ workspaceId: String) async throws -> [RuntimeContract.AgentRoleItem] = { _ in [] }
   /// Asks the computer to probe an agent config the options list without a capability (the
@@ -29,11 +30,13 @@ struct SessionComposerService {
       guard let runtime = DataRuntime.current, runtime.workspace == workspaceId, runtime.userId == userId else { return nil }
       return await runtime.billing.entitlement(workspace: workspaceId, user: userId)?["effectivePlanTier"] as? String
     },
+    cachedRoles: { workspaceId in
+      guard !LodyUIVerify.enabled, let runtime = DataRuntime.current,
+            runtime.workspace == workspaceId, !runtime.userId.isEmpty else { return nil }
+      return await CreateSessionService.live.cachedRoles(runtime.userId, workspaceId)
+    },
     roles: { workspaceId in
-      guard !LodyUIVerify.enabled, let runtime = DataRuntime.current, runtime.workspace == workspaceId else { return [] }
-      return try await runtime.workspaceCall(RuntimeContract.Calls.AgentRoles.self) { workspace, userId in
-        .list(.init(workspaceId: workspace, userId: userId))
-      }.roles
+      try await CreateSessionService.live.roles(workspaceId)
     },
     probe: { workspaceId, projectId, agentConfigId in
       guard let runtime = DataRuntime.current else { return }
@@ -92,7 +95,8 @@ final class SessionComposerModel {
   /// Readable Roles; nil until listed, and then no Role is claimed either way.
   private var roles: [RuntimeContract.AgentRoleItem]?
   private var rolesKey = ""
-  private var rolesTask: Task<Void, Never>?
+  private var rolesLoaded = false
+  private(set) var rolesTask: Task<Void, Never>?
   /// The Role picked in this composer; `.some(nil)` is an explicit None. Dropped once a newer
   /// turn lands (web fences its selection override by turn keys).
   private var pickedRole: String??
@@ -163,10 +167,19 @@ final class SessionComposerModel {
 
   /// The runtime reports changed creation options (a computer caught up, came online or the
   /// runtime became ready): read them again while the last read left this conversation's
-  /// capability or agent unlisted.
+  /// capability, agent or Role list incomplete.
   func optionsChanged() {
+    if !rolesLoaded, !rolesKey.isEmpty {
+      readRoles(rolesKey)
+    }
     guard let read = optionsRead, let key = capabilityKey else { return }
     readOptions(read, key: key, retry: true)
+  }
+
+  /// The workspace's Role rows changed: refresh the composer's Role list while keeping the last one on error.
+  func rolesChanged() {
+    guard !rolesKey.isEmpty else { return }
+    readRoles(rolesKey)
   }
 
   private func readOptions(_ read: OptionsRead, key: String, retry: Bool) {
@@ -212,11 +225,25 @@ final class SessionComposerModel {
     guard workspaceId != rolesKey else { return }
     rolesKey = workspaceId
     roles = nil
+    rolesLoaded = false
     rolesTask?.cancel()
     guard !workspaceId.isEmpty else { return }
+    readRoles(workspaceId)
+  }
+
+  private func readRoles(_ workspaceId: String) {
+    rolesTask?.cancel()
     let service = service
     rolesTask = Task { [weak self] in
+      if let self, self.roles == nil, let cached = await service.cachedRoles(workspaceId) {
+        guard !Task.isCancelled, self.rolesKey == workspaceId else { return }
+        if self.roles == nil {
+          self.roles = cached
+          self.changed?()
+        }
+      }
       guard let roles = try? await service.roles(workspaceId), let self, !Task.isCancelled, self.rolesKey == workspaceId else { return }
+      self.rolesLoaded = true
       self.roles = roles
       self.changed?()
     }
