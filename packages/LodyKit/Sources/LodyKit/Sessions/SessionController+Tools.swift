@@ -64,6 +64,100 @@ extension SessionController {
     String.LocalizationValue((platform == .android ? "emulator." : "simulator.") + suffix)
   }
 
+  func handleRemotePreviewMenu(_ target: RemotePreviewTarget) {
+    let state = source.state
+    guard let session = state.catalog.session(sessionId) else { return }
+    let presence = state.presence.status(of: session.machineId)
+    let machineOnline: Bool?
+    if presence == "online" {
+      machineOnline = true
+    } else if presence == "offline" {
+      machineOnline = false
+    } else {
+      machineOnline = nil
+    }
+    let hasCachedBrowser = previewCache.cachedBrowser(for: previewSessionKey(state)) != nil
+    let decision = SessionRemotePreview.evaluate(
+      target,
+      sessionUserId: session.userId,
+      currentUserId: state.userId,
+      machineSimulator: deviceAvailability(.ios, state.catalog, session),
+      machineEmulator: deviceAvailability(.android, state.catalog, session),
+      machineCapabilities: state.catalog.machineCapabilities[session.machineId],
+      machineOnline: machineOnline,
+      hasBrowserCandidate: feed?.state.preview != nil || hasCachedBrowser,
+      hasCachedBrowser: hasCachedBrowser,
+      iosRunning: devicePreviews[.ios]?.running == true,
+      androidRunning: devicePreviews[.android]?.running == true
+    )
+    switch decision {
+    case .openBrowser:
+      browserAction("open")
+    case .browserEmpty:
+      presentBrowserPreviewEmpty(stoppedLabel: nil)
+    case .openDevice(let platform):
+      if devicePreviews[platform] == nil {
+        prepareSimulator(state, session)
+      }
+      openSimulator(platform)
+    case .requiresMacOS:
+      LodyToastOverlay.shared.show(message: String(localized: "simulator.requiresMacOS", bundle: .lody), kind: .neutral)
+    case .ownerOnly:
+      LodyToastOverlay.shared.show(message: String(localized: "session.remotePreview.ownerOnly", bundle: .lody), kind: .neutral)
+    case .machineOffline:
+      LodyToastOverlay.shared.show(message: String(localized: "session.remotePreview.machineOffline", bundle: .lody), kind: .neutral)
+    case .upgradeRequired(let upgradeTarget):
+      switch upgradeTarget {
+      case .browser:
+        LodyToastOverlay.shared.show(message: String(localized: "session.preview.unsupported", bundle: .lody), kind: .neutral)
+      case .iosSimulator:
+        let alert = UIAlertController(
+          title: String(localized: "simulator.menu", bundle: .lody),
+          message: String(localized: "simulator.upgradeRequired", bundle: .lody),
+          preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok", bundle: .lody), style: .default))
+        present(alert, animated: true)
+      case .androidEmulator:
+        let alert = UIAlertController(
+          title: String(localized: "emulator.menu", bundle: .lody),
+          message: String(localized: "emulator.upgradeRequired", bundle: .lody),
+          preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok", bundle: .lody), style: .default))
+        present(alert, animated: true)
+      }
+    }
+  }
+
+  private func presentBrowserPreviewEmpty(stoppedLabel: String?) {
+    let message: String
+    if let stoppedLabel, !stoppedLabel.isEmpty {
+      message = String(
+        format: String(localized: "session.remotePreview.browserStopped.message", bundle: .lody),
+        stoppedLabel
+      )
+    } else {
+      message = String(localized: "session.remotePreview.browserEmpty.message", bundle: .lody)
+    }
+    let alert = UIAlertController(
+      title: String(localized: "session.remotePreview.browserEmpty.title", bundle: .lody),
+      message: message,
+      preferredStyle: .alert
+    )
+    alert.addAction(UIAlertAction(
+      title: String(localized: "session.remotePreview.browserEmpty.insert", bundle: .lody),
+      style: .default
+    ) { [weak self] _ in
+      guard let self else { return }
+      let prompt = String(localized: "session.remotePreview.browserPrompt", bundle: .lody)
+      self.chat.composer.appendDraft(Self.json(["id": UUID().uuidString, "text": prompt]))
+      self.chat.composer.focusDraft()
+    })
+    alert.addAction(UIAlertAction(title: String(localized: "common.cancel", bundle: .lody), style: .cancel))
+    present(alert, animated: true)
+  }
+
   func openSimulator(_ platform: DevicePlatform) {
     guard !openingSimulator, let session = source.state.catalog.session(sessionId), let simulator = devicePreviews[platform] else { return }
     if deviceAvailability(platform, source.state.catalog, session) == "upgrade-required" {
@@ -258,6 +352,10 @@ extension SessionController {
         guard source.state.key == state.key else { throw OutboxError.scopeExpired }
         guard viewIfLoaded?.window != nil else { return }
         if let error = reply.error {
+          if !isStop, SessionRemotePreview.isBrowserServerStoppedError(error) {
+            presentBrowserPreviewEmpty(stoppedLabel: feed?.state.preview?.label)
+            return
+          }
           let message = error == "unsupported" ? String(localized: "session.preview.unsupported", bundle: .lody) : reply.message ?? String(localized: "session.preview.generic", bundle: .lody)
           throw SettingsError(message)
         }

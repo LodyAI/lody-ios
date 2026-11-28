@@ -52,6 +52,44 @@ extension SessionController {
     return items
   }
 
+  func remotePreviewMenu(_ session: SessionItem) -> UIMenu? {
+    let state = source.state
+    guard !session.archived, !session.isTabClosed,
+          WorkspaceModePins.shared.mode(state.workspaceId) == .plaintext else { return nil }
+    let previewLabel = feed?.state.preview?.label
+    let iosDimmed = SessionRemotePreview.isIosSimulatorDimmed(
+      machineSimulator: deviceAvailability(.ios, state.catalog, session)
+    )
+    let iosSymbol = UIImage(systemName: "iphone")
+    let iosImage = iosDimmed ? iosSymbol?.withTintColor(.tertiaryLabel, renderingMode: .alwaysOriginal) : iosSymbol
+    let children: [UIMenuElement] = [
+      UIAction(
+        title: text("session.remotePreview.browser"),
+        subtitle: previewLabel,
+        image: UIImage(systemName: "safari")
+      ) { [weak self] _ in
+        self?.handleRemotePreviewMenu(.browser)
+      },
+      UIAction(
+        title: text("simulator.menu"),
+        image: iosImage
+      ) { [weak self] _ in
+        self?.handleRemotePreviewMenu(.iosSimulator)
+      },
+      UIAction(
+        title: text("emulator.menu"),
+        image: UIImage(systemName: DevicePlatform.androidSymbol)
+      ) { [weak self] _ in
+        self?.handleRemotePreviewMenu(.androidEmulator)
+      },
+    ]
+    return UIMenu(
+      title: text("session.remotePreview.title"),
+      image: UIImage(systemName: "play.rectangle"),
+      children: children
+    )
+  }
+
   /// The row's tier actions (Later / Settle / Move to Focus) grouped under one Conversation status
   /// submenu, placed directly above Archive in the More menu.
   /// A Tab never lists; its status is its conversation's, so the menu acts on that root.

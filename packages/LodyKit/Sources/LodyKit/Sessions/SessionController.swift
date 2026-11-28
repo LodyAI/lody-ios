@@ -530,6 +530,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       })
     }
     children += sessionMenuItems(session, canManage: canManage)
+    if let remotePreview = remotePreviewMenu(session) {
+      children.append(remotePreview)
+    }
     if WorkspaceModePins.shared.mode(state.workspaceId) == .plaintext {
       let shareImage = UIAction(title: String(localized: "session.action.shareImage", bundle: .lody), image: UIImage(systemName: "photo")) { [weak self] _ in
         self?.beginShareAsImage()

@@ -134,4 +134,192 @@ final class SessionMoreMenuTests: XCTestCase {
     )
     XCTAssertNil(readOnlyController.moreMenuElements().first { $0.title == statusTitle })
   }
+
+  func testMoreMenuExposesRemotePreviewSubmenuAfterCopyForPlaintextOpenSessions() throws {
+    let session = SessionItem(id: "s-preview", title: "Preview", status: "idle", userId: "user-1", machineId: "linux-box")
+    let workspaceId = "ws-remote-preview-\(UUID().uuidString)"
+    try WorkspaceModePins.shared.observe(workspaceId, mode: .plaintext)
+    let catalog = SessionCatalog(
+      sessions: [session],
+      machineIds: ["linux-box"],
+      machineNames: ["linux-box": "Linux Box"],
+      machineOs: ["linux-box": "linux"],
+      machineEmulators: ["linux-box": "available"],
+      machineCapabilities: ["linux-box": ["previewControl": 1, "androidEmulator": 1]]
+    )
+    let state = SessionListState(
+      userId: "user-1",
+      workspaceId: workspaceId,
+      workspaces: [AuthWorkspace(id: workspaceId, name: "Workspace", slug: "ws", image: nil)],
+      catalog: catalog
+    )
+    let source = SessionSource(changes: [], read: { state }, write: { _, _, _ in })
+    let controller = SessionController(
+      sessionId: session.id,
+      source: source,
+      feed: SessionFeedService(watch: { _, _ in {} }, reconnect: { _ in }, cached: { _, _, _ in nil }),
+      previewCache: SessionPreviewCache(observeMemoryWarning: false)
+    )
+
+    let elements = controller.moreMenuElements()
+    let copyTitle = localized("session.copy.title")
+    let remoteTitle = localized("session.remotePreview.title")
+    guard let copyIndex = elements.firstIndex(where: { $0.title == copyTitle }),
+          let remoteIndex = elements.firstIndex(where: { $0.title == remoteTitle }),
+          let remoteSubmenu = elements[remoteIndex] as? UIMenu else {
+      return XCTFail("Expected Copy and Remote preview submenus in More menu: \(elements.map(\.title))")
+    }
+    XCTAssertEqual(copyIndex + 1, remoteIndex, "Remote preview submenu should follow Copy")
+    XCTAssertFalse(remoteSubmenu.options.contains(.displayInline))
+    XCTAssertEqual(
+      remoteSubmenu.children.map(\.title),
+      [localized("session.remotePreview.browser"), localized("simulator.menu"), localized("emulator.menu")]
+    )
+    // Non-macOS keeps iOS Simulator with no extra subtitle text and clickable for the macOS tooltip.
+    let iosAction = try XCTUnwrap(remoteSubmenu.children[1] as? UIAction)
+    XCTAssertNil(iosAction.subtitle)
+    XCTAssertFalse(iosAction.attributes.contains(.disabled))
+
+    // Archived sessions hide the Remote preview submenu.
+    let archived = SessionItem(id: "s-arch", title: "Archived", status: "idle", archived: true, userId: "user-1", machineId: "linux-box")
+    let archivedState = SessionListState(
+      userId: "user-1",
+      workspaceId: workspaceId,
+      workspaces: state.workspaces,
+      catalog: SessionCatalog(sessions: [archived])
+    )
+    let archivedController = SessionController(
+      sessionId: archived.id,
+      source: SessionSource(changes: [], read: { archivedState }, write: { _, _, _ in }),
+      feed: SessionFeedService(watch: { _, _ in {} }, reconnect: { _ in }, cached: { _, _, _ in nil }),
+      previewCache: SessionPreviewCache(observeMemoryWarning: false)
+    )
+    XCTAssertNil(archivedController.moreMenuElements().first { $0.title == remoteTitle })
+  }
+
+  func testRemotePreviewPolicyHandlesMacOSOwnerCapabilityOfflineAndBrowserStates() {
+    // Non-macOS computer dims iOS Simulator and reports requiresMacOS on tap.
+    XCTAssertTrue(SessionRemotePreview.isIosSimulatorDimmed(machineSimulator: nil))
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .iosSimulator,
+        sessionUserId: "user-2",
+        currentUserId: "user-1",
+        machineSimulator: nil,
+        machineEmulator: "available",
+        machineCapabilities: ["previewControl": 1, "androidEmulator": 1],
+        machineOnline: false,
+        hasBrowserCandidate: false,
+        hasCachedBrowser: false,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .requiresMacOS
+    )
+
+    // Non-owner sees items and gets ownerOnly on tap.
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .browser,
+        sessionUserId: "user-2",
+        currentUserId: "user-1",
+        machineSimulator: "available",
+        machineEmulator: "available",
+        machineCapabilities: ["previewControl": 1],
+        machineOnline: true,
+        hasBrowserCandidate: true,
+        hasCachedBrowser: false,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .ownerOnly
+    )
+
+    // Old CLI lacking capabilities prompts upgrade instead of hiding.
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .iosSimulator,
+        sessionUserId: "user-1",
+        currentUserId: "user-1",
+        machineSimulator: "upgrade-required",
+        machineEmulator: nil,
+        machineCapabilities: ["previewControl": 1],
+        machineOnline: true,
+        hasBrowserCandidate: false,
+        hasCachedBrowser: false,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .upgradeRequired(.iosSimulator)
+    )
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .androidEmulator,
+        sessionUserId: "user-1",
+        currentUserId: "user-1",
+        machineSimulator: "available",
+        machineEmulator: nil,
+        machineCapabilities: ["previewControl": 1],
+        machineOnline: true,
+        hasBrowserCandidate: false,
+        hasCachedBrowser: false,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .upgradeRequired(.androidEmulator)
+    )
+
+    // Browser opens when candidate exists, shows empty prompt when absent, and detects stopped server errors.
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .browser,
+        sessionUserId: "user-1",
+        currentUserId: "user-1",
+        machineSimulator: "available",
+        machineEmulator: "available",
+        machineCapabilities: ["previewControl": 1],
+        machineOnline: true,
+        hasBrowserCandidate: false,
+        hasCachedBrowser: false,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .browserEmpty
+    )
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .browser,
+        sessionUserId: "user-1",
+        currentUserId: "user-1",
+        machineSimulator: "available",
+        machineEmulator: "available",
+        machineCapabilities: ["previewControl": 1],
+        machineOnline: false,
+        hasBrowserCandidate: true,
+        hasCachedBrowser: false,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .machineOffline
+    )
+    XCTAssertEqual(
+      SessionRemotePreview.evaluate(
+        .browser,
+        sessionUserId: "user-1",
+        currentUserId: "user-1",
+        machineSimulator: "available",
+        machineEmulator: "available",
+        machineCapabilities: ["previewControl": 1],
+        machineOnline: false,
+        hasBrowserCandidate: true,
+        hasCachedBrowser: true,
+        iosRunning: false,
+        androidRunning: false
+      ),
+      .openBrowser
+    )
+    XCTAssertTrue(SessionRemotePreview.isBrowserServerStoppedError("port_not_listening"))
+    XCTAssertTrue(SessionRemotePreview.isBrowserServerStoppedError("local_server_unreachable"))
+    XCTAssertFalse(SessionRemotePreview.isBrowserServerStoppedError("tunnel_creation_failed"))
+  }
 }
