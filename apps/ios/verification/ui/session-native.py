@@ -31,16 +31,24 @@ def wait_clipboard(text):
             f'Clipboard did not receive {text}')
 
 
-def tap_label(label):
+def tap_label(label, post_delay='.6'):
     ui.wait(lambda items: any(i.get('AXLabel') == label for i in items), f'Missing {label}')
-    ui.axe('tap', '--label', label, '--post-delay', '.6')
+    ui.axe('tap', '--label', label, '--post-delay', post_delay)
+
+
+def tap_frame(frame):
+    ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] + frame['height'] / 2), '--post-delay', '.6')
+
+
+def tap_back():
+    back = next(item for item in reversed(ui.state()) if item.get('AXUniqueId') == 'BackButton')
+    tap_frame(back['frame'])
 
 
 def tap_menu_item(title):
     # Menu items with a subtitle expose "title, subtitle" as one label.
     item = ui.wait(lambda items: next((i for i in items if (i.get('AXLabel') or '').startswith(title)), None), f'Missing {title}')
-    frame = item['frame']
-    ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] + frame['height'] / 2), '--post-delay', '.6')
+    tap_frame(item['frame'])
 
 
 def check_reconnect():
@@ -67,7 +75,7 @@ def check_archive():
     ui.open_case('session-preview-archive-error')
     wait_probe('live', 'Archive failure scenario did not start')
     tap_label(more)
-    tap_label(catalog.text('session.action.archive'))
+    tap_label(catalog.text('session.action.archive'), post_delay='0')
     ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('session.toast.archiveFailed') for i in items),
             'Missing archive failure')
     ui.wait(lambda items: not any(i.get('AXUniqueId') == 'session-preview-probe' for i in items),
@@ -101,7 +109,6 @@ wait_text('Live reply with a needle')
 assert not any('Cached reply' in spoken(i) for i in ui.state()), 'The live revision must replace the cached history'
 title = ui.element('chat-navigation-title')
 assert 'Native session preview' in spoken(title), title
-wait_text('src/App.tsx')
 ui.capture('live')
 
 ui.axe('tap', '--id', 'preview-answer:meta:details', '--post-delay', '.5')
@@ -112,38 +119,48 @@ assert probe().split(',').count('watch') == 1, 'Opening details started another 
 assert 'unwatch' not in probe().split(','), 'Closing details stopped the owning session feed'
 
 ui.capture('details-return')
-process_row = ui.element('preview-user:duration')
-process = process_row['frame']
-assert ', ' in (process_row.get('AXLabel') or ''), f"The process row must read its duration and summary lines: {process_row.get('AXLabel')}"
-assert not any(item.get('AXUniqueId') == 'preview-answer:process' for item in ui.state()), 'The first summary must merge into the process row'
-task = ui.element('preview-answer:task')['frame']
-reply = ui.element('preview-answer:reply')['frame']
-assert process['y'] + process['height'] <= task['y'] + 1 and task['y'] + task['height'] <= reply['y'] + 1, \
-    'Sub-agent rows hang under the process row, above the answer'
-assert task['height'] >= 44 and process['height'] >= 52, f'Process {process} and sub-agent {task} rows keep their rail heights'
-ui.capture('native-process-rail')
-ui.axe('tap', '-x', str(process['x'] + 60), '-y', str(process['y'] + process['height'] / 2), '--post-delay', '.5')
+output_rows = [ui.element(identifier)['frame'] for identifier in (
+    'preview-user:duration', 'preview-answer:reply', 'preview-answer:tasks',
+    'preview-answer:changes', 'preview-answer:meta:details',
+)]
+assert all(a['y'] + a['height'] <= b['y'] + 1 for a, b in zip(output_rows, output_rows[1:])), \
+    'The folded work precedes the answer, tasks, changed files and footer in order'
+assert not any(item.get('AXUniqueId') == 'preview-answer:process' for item in ui.state()), 'Completed tools should start folded'
+ui.capture('native-turn-output')
+
+files_title = catalog.plural('native.chat.transcript.fileCount', 1)
+ui.axe('tap', '--id', 'preview-answer:changes', '--post-delay', '.5')
+wait_text('src/App.tsx')
+ui.capture('native-turn-files')
+tap_label(catalog.text('accessibility.closeSheet', title=files_title))
+
+ui.axe('tap', '--id', 'preview-user:duration', '--post-delay', '.5')
+ui.axe('tap', '--id', 'preview-answer:process', '--post-delay', '.5')
 assert ui.element('preview-answer:edit')['type'] == 'Button'
 ui.axe('tap', '--id', 'preview-answer:edit')
 wait_text('Native session tool detail')
 ui.capture('native-item-details')
 tap_label(catalog.text('common.done'))
 ui.element('preview-answer:edit')
-tap_label(catalog.text('accessibility.closeSheet', title=catalog.text('process.title')))
+ui.axe('tap', '--id', 'preview-user:duration', '--post-delay', '.5')
 ui.element('session-preview-probe')
 assert probe().split(',').count('watch') == 1, 'Tool details started another runtime subscription'
 assert 'unwatch' not in probe().split(','), 'Closing tool details stopped the owning feed'
 
 
-# Subagent details consume the same feed and expose their result and copy action.
-ui.axe('tap', '--id', 'preview-answer:task', '--post-delay', '.5')
+# The task card opens a sheet whose details use the same feed.
+ui.axe('tap', '--id', 'preview-answer:tasks', '--post-delay', '.5')
+task_label = 'test-runner, Verify the native session'
+tap_label(task_label)
 assert 'Native task summary: all checks passed.' in spoken(ui.element('subagent-detail-result'))
 subprocess.run(['xcrun', 'simctl', 'pbcopy', ui.udid], input='before subagent copy', text=True, check=True)
 ui.axe('tap', '--id', 'subagent-detail-copy', '--post-delay', '.3')
 wait_clipboard('Native task summary: all checks passed.')
 ui.capture('native-subagent')
-ui.axe('tap', '--wait-timeout', '5', '--id', 'BackButton', '--post-delay', '.6')
-ui.element('preview-answer:task')
+tap_back()
+wait_text(task_label)
+tap_label(catalog.text('accessibility.closeSheet', title=catalog.text('process.tasks')))
+ui.element('preview-answer:tasks')
 assert probe().split(',').count('watch') == 1
 
 # Browser preview commands use the injected native service, with no cloud access.
@@ -161,21 +178,33 @@ ui.capture('native-browser-preview')
 ui.axe('tap', '--id', 'session-input', '--post-delay', '.3')
 ui.type_into('session-input', 'Keep this draft')
 original_draft = ui.element('session-input').get('AXValue') or ''
-tap_label('PR #31')
+transcript_top = ui.element('chat-transcript')['frame']['y']
+ui.axe('tap', '-x', '5', '-y', str(transcript_top + 10), '--post-delay', '.6')
+ui.element('session-bar:context')
+ui.axe('tap', '--id', 'session-bar:context', '--post-delay', '.5')
+tap_menu_item(catalog.text('bar.context.viewPR'))
 ui.element('pr-title')
 ui.axe('tap', '--id', 'pr-checks', '--post-delay', '.4')
 ui.element('pr-check-1')
 tap_label(catalog.text('pr.investigate'))
 wait_text(catalog.text('pr.draftAdded'))
 tap_label(catalog.text('common.ok'))
-for _ in range(2):
-    ui.axe('drag', '--start-x', '2', '--start-y', '450', '--end-x', '365', '--end-y', '450', '--duration', '.5', '--post-delay', '.7')
+tap_back()
+ui.element('pr-title')
+# The PR sheet exposes its grabber alongside its own toolbar actions.
+pr_header = ui.wait(lambda items: next((i for i in items if i.get('type') == 'Heading' and i.get('AXLabel') == 'PR #31'), None),
+                    'Missing PR sheet heading')['frame']
+grabber_x = pr_header['x'] + pr_header['width'] / 2
+grabber_y = pr_header['y'] - 12
+ui.axe('drag', '--start-x', str(grabber_x), '--start-y', str(grabber_y),
+       '--end-x', str(grabber_x), '--end-y', str(grabber_y + 300), '--duration', '.5', '--post-delay', '.6')
+ui.wait(lambda items: not any(i.get('AXUniqueId') == 'pr-title' for i in items), 'PR sheet did not dismiss')
 draft = ui.element('session-input').get('AXValue') or ''
 assert draft.startswith(original_draft + '\n\n') and 'github.com/Innei/lody-ios/pull/31' in draft, draft
 ui.capture('native-pr-draft')
 
-ui.axe('tap', '--id', 'chat-navigation-title', '--post-delay', '.6')
-tap_menu_item(catalog.text('session.title.copyBranch'))
+ui.axe('tap', '--id', 'session-bar:context', '--post-delay', '.5')
+tap_label(catalog.text('session.title.copyBranch'))
 wait_clipboard('feature/native-session')
 
 check_archive()
