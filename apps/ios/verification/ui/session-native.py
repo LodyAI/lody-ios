@@ -210,15 +210,18 @@ for option, expected in [
 # Rename and Change owner write through the session service.
 tap_label(more)
 tap_label(catalog.text('session.action.rename'))
-ui.wait(lambda items: any(i.get('type') == 'TextField' for i in items), 'Rename prompt has no title field')
-ui.axe('key-combo', '--modifiers', '227', '--key', '4')
-ui.axe('key', '42')
-ui.axe('type', 'Renamed preview')
+title_field = ui.wait(lambda items: next((i for i in items if i.get('type') == 'TextField'), None),
+                      'Rename prompt has no title field')
+renamed = (title_field.get('AXValue') or '') + ' revised'
+ui.axe('type', ' revised')
+ui.wait(lambda items: any(i.get('type') == 'TextField' and (i.get('AXValue') or '').casefold() == renamed.casefold()
+                          for i in items), 'The new title did not reach the rename field')
 buttons = [i for i in ui.state() if i.get('type') == 'Button' and i.get('AXLabel') == catalog.text('session.action.rename')]
 frame = max(buttons, key=lambda i: i['frame']['y'])['frame']
 ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] + frame['height'] / 2), '--post-delay', '.5')
 wait_probe('rename', 'Rename did not reach the session service')
-wait_text('Renamed preview')
+ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-navigation-title' and renamed.casefold() in spoken(i).casefold()
+                          for i in items), 'The conversation header did not show the new title')
 
 tap_label(more)
 tap_label(catalog.text('session.owner.change'))
