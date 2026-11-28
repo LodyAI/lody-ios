@@ -121,6 +121,7 @@ tap_label(catalog.text('accessibility.closeSheet', title=files_title))
 ui.axe('tap', '--id', 'preview-user:duration', '--post-delay', '.5')
 ui.axe('tap', '--id', 'preview-answer:process', '--post-delay', '.5')
 assert ui.element('preview-answer:edit')['type'] == 'Button'
+ui.capture('native-process-sheet')
 ui.axe('tap', '--id', 'preview-answer:edit')
 wait_text('Native session tool detail')
 ui.capture('native-item-details')

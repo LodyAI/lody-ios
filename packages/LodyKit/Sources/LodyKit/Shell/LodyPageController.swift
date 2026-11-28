@@ -50,9 +50,18 @@ final class LodyPageController: UIViewController {
     if inSheet, spec.headerVariant == "glass" {
       appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
     }
-    navigationItem.standardAppearance = appearance
+    let scrolledAppearance: UINavigationBarAppearance
+    if #available(iOS 26.0, *) {
+      scrolledAppearance = appearance
+    } else if inSheet {
+      scrolledAppearance = UINavigationBarAppearance()
+      scrolledAppearance.configureWithDefaultBackground()
+    } else {
+      scrolledAppearance = appearance
+    }
+    navigationItem.standardAppearance = scrolledAppearance
     navigationItem.scrollEdgeAppearance = appearance
-    navigationItem.compactAppearance = appearance
+    navigationItem.compactAppearance = scrolledAppearance
     navigationItem.backButtonDisplayMode = .minimal
     NotificationCenter.default.addObserver(
       self, selector: #selector(appearanceChanged), name: .lodyAppearanceDidChange, object: nil
@@ -167,8 +176,13 @@ final class LodyPageController: UIViewController {
     let container = navigationController?.modalPresentationStyle
     let regular = (view.window?.traitCollection ?? traitCollection).horizontalSizeClass == .regular
     let overlay = spec.style == "overFullScreen" || container == .overFullScreen
-    let compactSheet = inSheet && !regular && (container == .formSheet || container == .pageSheet)
-    view.backgroundColor = overlay || compactSheet ? .clear : .lodyGroupedBackground
+    let glassSheet: Bool
+    if #available(iOS 26.0, *) {
+      glassSheet = inSheet && !regular && (container == .formSheet || container == .pageSheet)
+    } else {
+      glassSheet = false
+    }
+    view.backgroundColor = overlay || glassSheet ? .clear : .lodyGroupedBackground
   }
 }
 

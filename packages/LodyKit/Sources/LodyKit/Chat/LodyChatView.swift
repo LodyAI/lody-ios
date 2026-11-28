@@ -783,9 +783,11 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   }
 
   // Off-window views have no size class yet; fall back to the idiom until the
-  // window reports one.
+  // window reports one. Before iOS 26, compact sheets have no system Liquid Glass
+  // surface behind clear content, so keep the solid reading canvas.
   var processBackground: UIColor {
     guard !processEntryID.isEmpty else { return .lodyBackground }
+    guard #available(iOS 26.0, *) else { return .lodyBackground }
     switch window?.traitCollection.horizontalSizeClass ?? .unspecified {
     case .compact: return .clear
     case .regular: return .lodyBackground
