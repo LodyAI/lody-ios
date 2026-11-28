@@ -677,8 +677,11 @@ try:
                 elif case in ('session-search', 'mentions-production'):
                     # Long search and mention-kind loops reach ~290s alone.
                     check_timeout = 420
-                elif case in ('session-native', 'proposal-cards'):
-                    # Shared-feed actions or seven proposal scenes with captures and navigation.
+                elif case == 'session-native':
+                    # Shared-feed actions, native sheets and repeated AX captures on a cold CI simulator.
+                    check_timeout = 600
+                elif case == 'proposal-cards':
+                    # Seven proposal scenes with captures and navigation.
                     check_timeout = 420
                 elif case == 'ipad':
                     # Sidebar, both orientations, keyboard and two native creation flows.
