@@ -1981,7 +1981,7 @@ test('Roost exports the full history before paging and leaves the shared queue o
       requests.some((item) => item.params.query?.kind === 'readOlderPage'),
       false,
     );
-    const updated = fixture.nextEmit();
+    const updated = fixture.nextEmit((event) => event.historyHasMore === false);
     await fixture.runtime.loadOlderSession('s1');
     const page = await updated;
     assert.deepEqual(
@@ -1991,7 +1991,7 @@ test('Roost exports the full history before paging and leaves the shared queue o
     assert.equal(page.entries.at(-1).items[0].itemId, itemId);
     assert.equal(historyStart, 0);
     fixture.runtime.stopSessions();
-    const resumed = fixture.nextEmit();
+    const resumed = fixture.nextEmit((event) => event.historyHasMore === false);
     await fixture.reopen(historyStart);
     assert.deepEqual(
       (await resumed).entries.map((entry) => entry.id),
