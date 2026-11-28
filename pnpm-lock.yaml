@@ -6,6 +6,7 @@ settings:
 
 overrides:
   happy-dom: 21.0.4
+  '@loro-dev/streams-crdt>@loro-dev/streams-client': 0.16.0
 
 importers:
 
@@ -30,11 +31,11 @@ importers:
         specifier: 0.5.0
         version: 0.5.0
       '@loro-dev/streams-client':
-        specifier: 0.13.1
-        version: 0.13.1(effect@4.0.2)
+        specifier: 0.16.0
+        version: 0.16.0(effect@4.0.2)
       '@loro-dev/streams-crdt':
-        specifier: 0.21.1
-        version: 0.21.1(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)
+        specifier: 0.24.0
+        version: 0.24.0(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)
       '@pierre/diffs':
         specifier: 1.4.1
         version: 1.4.1(@shikijs/themes@4.4.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -82,11 +83,11 @@ importers:
         specifier: 0.3.2
         version: 0.3.2(effect@4.0.2)
       '@loro-dev/streams-client':
-        specifier: 0.13.1
-        version: 0.13.1(effect@4.0.2)
+        specifier: 0.16.0
+        version: 0.16.0(effect@4.0.2)
       '@loro-dev/streams-crdt':
-        specifier: 0.21.1
-        version: 0.21.1(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)
+        specifier: 0.24.0
+        version: 0.24.0(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)
       acp-extension-core:
         specifier: 0.3.0
         version: 0.3.0(zod@4.6.7)
@@ -462,15 +463,6 @@ packages:
   '@loro-dev/roost@0.3.2':
     resolution: {integrity: sha512-uRFPkyiu0b/eyj/3gehTSqjY1RY5jivB0QUBa02Zu9VE2xivVBlNJ0QvilzuSwygtgHwW68G/lw3wQNklBNcog==}
 
-  '@loro-dev/streams-client@0.13.1':
-    resolution: {integrity: sha512-qOyKNzKpXcOI4DcXJQX7Vzrf4T175ji//qosHyfVXkLY2X0M0qOD0VfaKFwTdlwEeUw5UmgohiNn2Os4AVx4BQ==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      effect: 4.0.2
-    peerDependenciesMeta:
-      effect:
-        optional: true
-
   '@loro-dev/streams-client@0.16.0':
     resolution: {integrity: sha512-+NWjig5iZ0FamC6dtdVwHUy0cr1VZZVvj6xWR98yCKjrBNk5mL1Q/SgzJo1FKhpwpDy0LkdLVXUwshg6H8ZsAA==}
     engines: {node: '>=18'}
@@ -480,8 +472,8 @@ packages:
       effect:
         optional: true
 
-  '@loro-dev/streams-crdt@0.21.1':
-    resolution: {integrity: sha512-4ATQh1/2cLVzTkSS4D1tbhrtaY3Nbd+RSqp90IvTCU6Up4CWtiGmiDxD/YJMSV1O3fOfQ9nLGbvy8Ijb+33DHA==}
+  '@loro-dev/streams-crdt@0.24.0':
+    resolution: {integrity: sha512-YuI/G9QDb+fxsbiD8jEkUxuKO3gzHcR5CwlkTMeZraNzflcPXPCkONhzDkZMq1omcG3EWVmGZZi3iUcqRpiOrw==}
     peerDependencies:
       '@loro-dev/flock-wasm': ^0.4.0 || ^0.5.0
       effect: 4.0.2
@@ -1235,17 +1227,13 @@ snapshots:
     transitivePeerDependencies:
       - effect
 
-  '@loro-dev/streams-client@0.13.1(effect@4.0.2)':
-    optionalDependencies:
-      effect: 4.0.2
-
   '@loro-dev/streams-client@0.16.0(effect@4.0.2)':
     optionalDependencies:
       effect: 4.0.2
 
-  '@loro-dev/streams-crdt@0.21.1(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)':
+  '@loro-dev/streams-crdt@0.24.0(@loro-dev/flock-wasm@0.5.0)(effect@4.0.2)(loro-crdt@1.17.0)':
     dependencies:
-      '@loro-dev/streams-client': 0.13.1(effect@4.0.2)
+      '@loro-dev/streams-client': 0.16.0(effect@4.0.2)
       effect: 4.0.2
     optionalDependencies:
       '@loro-dev/flock-wasm': 0.5.0

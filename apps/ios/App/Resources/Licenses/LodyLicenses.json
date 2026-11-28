@@ -33,14 +33,7 @@
       "text": 4
     },
     {
-      "name": "@loro-dev/streams-client@0.13.1",
-      "version": "0.13.1",
-      "license": "MIT",
-      "url": "https://github.com/loro-dev/loro-streams",
-      "text": 4
-    },
-    {
-      "name": "@loro-dev/streams-client@0.16.0",
+      "name": "@loro-dev/streams-client",
       "version": "0.16.0",
       "license": "MIT",
       "url": "https://github.com/loro-dev/loro-streams",
@@ -48,7 +41,7 @@
     },
     {
       "name": "@loro-dev/streams-crdt",
-      "version": "0.21.1",
+      "version": "0.24.0",
       "license": "MIT",
       "url": "https://github.com/loro-dev/loro-streams",
       "text": 4
