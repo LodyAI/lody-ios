@@ -14,8 +14,8 @@ Mobile attachment drafts and the durable send scheduler remain mobile-owned.
 HTML document with the existing CSP and inline WASM and copies dependency license
 text alongside it. Platform builders supply their own output directory.
 
-The runtime and native decoder pin Flock 0.5.0, Streams Client 0.13.1,
-Streams CRDT 0.21.1 and Loro 1.17.0, matching the Lody workspace.
+The runtime and native decoder pin Flock 0.5.0, Streams Client 0.16.0,
+Streams CRDT 0.24.0 and Loro 1.17.0, matching the Lody workspace.
 Control reads and durable uploads retain separate 15-second budgets; long-poll
 uses a 35-second poll budget. Uploads explicitly set `uploadTimeoutMs` because
 Streams Client 0.12+ otherwise defaults to 60 seconds, beyond native command
@@ -27,6 +27,40 @@ metadata every 250 ms. Network read failures use exponential backoff.
 Run `pnpm --filter @lody/cloud-runtime typecheck`. Existing behavioral fixtures
 under `apps/ios/tests` now load these shared production sources, retaining
 protocol, write ordering, uncertain delivery and recovery checks.
+
+## Streams WebSocket
+
+`LODY_LORO_STREAMS_WS_ENABLED=1` (or `true`) in the shared mobile backend config
+(`.env.local` or the build environment, same rule as desktop and CLI) builds the
+runtime with `LODY_MOBILE_STREAMS_WS`. It is off by default, does not change the
+storage namespace, and with it off every read and write is unchanged. When on, one
+pooled `loro-ds-v1` socket per workspace and gateway, authenticated with the
+workspace Streams grant, carries:
+
+- caught-up catalog watchers (`:meta`, machine streams, the workspace stream) and
+  Loro session reads;
+- Machine RPC replies, including the Roost history subscription;
+- machine presence: a read-only ephemeral JOIN of `:meta` `presence` on the grant
+  gateway, even when HTTP presence would use the shard host. Stopping it disposes
+  the room, which releases its socket lease;
+- appends from every `clientFor` and catalog client once that socket is ready.
+  Before it is ready, appends use HTTP. The SDK resends over HTTP only when the
+  server reports the frame not executed; an unacknowledged socket append is an
+  unknown outcome and is not replayed.
+
+The socket renews its grant for the active workspace even after the RPC that
+opened it ends. A server auth close invalidates the refused grant before the
+read falls back to HTTP. Bootstrap, catch-up, stream creation and every other
+request stay on HTTP.
+
+`createTailReader` returns each up-to-date checkpoint in the shape of a
+`readOnce({live: 'long-poll'})` result (JSON streams as one JSON array, as HTTP
+returns them), so the callers' budgets, cursors and retry rules are unchanged; 30
+quiet seconds return an empty up-to-date window, as a long-poll timeout does. Bytes
+inside an unfinished batch are never returned past the last offset the server
+confirmed. A dropped socket or error finishes that read over HTTP long-poll from
+that offset and keeps WebSocket reads off for 30 seconds, doubling to 10 minutes
+while it keeps failing.
 
 ## Roost sessions
 

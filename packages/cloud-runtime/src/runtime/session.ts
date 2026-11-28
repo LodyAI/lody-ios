@@ -66,6 +66,12 @@ import {
   samePermissionOutcome,
 } from '../protocol/permissionQuestions.ts';
 export { projectSession } from './project';
+import {
+  createTailReader,
+  streamsWebSocket,
+  streamsWebSocketEnabled,
+  streamsWebSocketFor,
+} from './live-read.ts';
 
 type Grant = { token: string; gatewayBaseUrl: string };
 export type SessionTarget =
@@ -1144,6 +1150,7 @@ export async function clientFor(id: string, getGrant: () => Promise<Grant>) {
   return new StreamsClient({
     url: `${grant.gatewayBaseUrl.replace(/\/$/, '')}/ds/lody/${encodeURIComponent(id)}`,
     auth: async () => (await getGrant()).token,
+    ...streamsWebSocketFor(getGrant, grant.gatewayBaseUrl, id),
     retry: { maxAttempts: 1 },
     // Keep writes within the native command budget; SDK 0.12+ defaults uploads to 60s.
     timeout: {
@@ -1302,6 +1309,7 @@ export async function openSession(
     if (sessionControlsReady(state)) settleControls(state);
   };
   event('syncing');
+  let tail: ReturnType<typeof createTailReader> | undefined;
   void (async () => {
     try {
       const data = await retrySessionRead(
@@ -1609,6 +1617,16 @@ export async function openSession(
       }
       pages = 0;
       let changed = true;
+      // Without the build switch every read stays exactly as before.
+      const tailReader = async () =>
+        (tail ??= createTailReader(
+          state.client,
+          streamsWebSocket(
+            state.getGrant,
+            (await sessionGrant(state)).gatewayBaseUrl,
+            workspace,
+          ),
+        ));
       while (!controller.signal.aborted) {
         if (upToDate) {
           state.streamReady = true;
@@ -1627,12 +1645,14 @@ export async function openSession(
           () =>
             readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
               livePoll = upToDate && state.streamReady === true;
-              const result = await state.client.readOnce({
-                offset,
-                cursor,
-                signal: controller.signal,
-                ...(livePoll ? { live: 'long-poll' as const } : {}),
-              });
+              const read = { offset, cursor, signal: controller.signal };
+              const result =
+                livePoll && streamsWebSocketEnabled
+                  ? await (await tailReader()).read(read)
+                  : await state.client.readOnce({
+                      ...read,
+                      ...(livePoll ? { live: 'long-poll' as const } : {}),
+                    });
               if (!result.ok) throw new Error(result.result.code);
               return result;
             }),
@@ -1659,6 +1679,8 @@ export async function openSession(
       state.streamReady = false;
       state.ready = false;
       event('offline', failed.message);
+    } finally {
+      tail?.close();
     }
   })();
   return 'watching';
@@ -1873,6 +1895,7 @@ export async function sendTurn(
   let holdsSession = true;
   let uploaded = false;
   let writeStarted = false;
+  let ackTail: ReturnType<typeof createTailReader> | undefined;
   try {
     const expanded = await expand(text);
     text = typeof expanded === 'string' ? expanded : expanded.text;
@@ -2273,13 +2296,25 @@ export async function sendTurn(
       state.controller.signal,
       AbortSignal.timeout(18000),
     ]);
+    ackTail = streamsWebSocketEnabled
+      ? createTailReader(
+          responseClient,
+          streamsWebSocket(
+            () => sessionGrant(state),
+            (await sessionGrant(state)).gatewayBaseUrl,
+            state.workspace,
+          ),
+        )
+      : undefined;
     let offset = '-1';
     while (!signal.aborted) {
-      const read = await responseClient.readOnce({
-        offset,
-        live: 'long-poll',
-        signal,
-      });
+      const read = ackTail
+        ? await ackTail.read({ offset, signal })
+        : await responseClient.readOnce({
+            offset,
+            live: 'long-poll',
+            signal,
+          });
       if (!read.ok) throw new Error(read.result.code);
       offset = read.result.nextOffset;
       if (!read.result.payload) continue;
@@ -2313,6 +2348,7 @@ export async function sendTurn(
       reason: error instanceof Error ? error.message : 'send_failed',
     };
   } finally {
+    ackTail?.close();
     // A released session may already belong to a later control or edit.
     if (holdsSession) state.sending = false;
     if (state.sendingId === id) state.sendingId = undefined;

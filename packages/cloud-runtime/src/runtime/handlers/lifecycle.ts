@@ -13,7 +13,11 @@ import {
   resumeAcceptedInputs,
   resumeSessions,
 } from '../session';
-import type { RuntimeContext } from './context.ts';
+import { scopedWorkspaceGrant, type RuntimeContext } from './context.ts';
+import {
+  setWorkspaceSocketGrant,
+  streamsWebSocketEnabled,
+} from '../live-read.ts';
 import type { HistoryTokenIntent } from '../../contract/sharing.ts';
 import { sessionActionMeta } from '../fork-session';
 
@@ -143,6 +147,11 @@ export function registerLifecycle(ctx: RuntimeContext) {
       }
       state.workspace = workspaceId;
       state.userId = userId;
+      if (scopeChanged && streamsWebSocketEnabled)
+        setWorkspaceSocketGrant(
+          workspaceId,
+          scopedWorkspaceGrant(ctx, workspaceId, userId),
+        );
       state.workspaceReadOnly = workspaceReadOnly === true;
       startAcceptedInputs({
         accountId: userId,

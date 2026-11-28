@@ -6,9 +6,8 @@ import catalog
 
 ui = UI(sys.argv[1], sys.argv[2])
 providers = ('auth.native.github', 'auth.native.google', 'auth-apple', 'auth.native.discord')
-provider_ids = providers + ('auth-email-entry',)
-frames = [ui.element(identifier)['frame'] for identifier in provider_ids]
-for identifier, frame in zip(provider_ids, frames):
+frames = [ui.element(identifier)['frame'] for identifier in providers + ('auth-email-entry',)]
+for identifier, frame in zip(providers + ('auth-email-entry',), frames):
     assert frame['height'] >= 44, (identifier, frame)
 # Web order: one equal-width group of providers, then the email entry below it.
 assert all(a['y'] < b['y'] for a, b in zip(frames, frames[1:])), frames
@@ -41,18 +40,20 @@ ui.capture('create-account')
 ui.axe('tap', '--id', 'auth-email-back')
 ui.element('auth.native.google')
 # Preview uses the production page with a deterministic service, no provider/network.
+provider_ids = providers + ('auth-email-entry',)
 resting = {i['AXUniqueId']: i['frame'] for i in ui.state() if i.get('AXUniqueId') in provider_ids}
+assert resting.keys() == set(provider_ids), ('Missing provider controls', resting)
 ui.axe('tap', '--id', 'auth.native.google')
 ui.wait(lambda items: any(item.get('AXUniqueId') == 'auth.native.google' and item.get('AXLabel') == catalog.text('auth.login.loading') for item in items), 'Provider did not show its waiting title')
 ui.capture('waiting')
 waiting = ui.state()
 assert not any(item.get('AXUniqueId') == 'auth-cancel' for item in waiting), 'Provider sign-in shows its own cancel; the page adds none'
-waiting_frames = {i['AXUniqueId']: i['frame'] for i in waiting if i.get('AXUniqueId') in provider_ids}
-assert resting.keys() == waiting_frames.keys() == set(provider_ids), (resting, waiting_frames)
-# AX coordinates can differ in the last decimal place while the pixel positions stay identical.
-shifted = {key: frame for key, frame in waiting_frames.items()
-           if any(not math.isclose(frame[edge], resting[key][edge], rel_tol=0, abs_tol=1e-6)
-                  for edge in ('x', 'y', 'width', 'height'))}
+waiting_frames = {i['AXUniqueId']: i['frame'] for i in waiting if i.get('AXUniqueId') in resting}
+assert waiting_frames.keys() == resting.keys(), ('Missing provider controls while waiting', waiting_frames)
+# AX may serialize the same frame with different trailing floating-point digits.
+shifted = {identifier: frame for identifier, frame in waiting_frames.items()
+           if any(not math.isclose(frame[key], value, rel_tol=0, abs_tol=1e-6)
+                  for key, value in resting[identifier].items())}
 assert not shifted, ('Provider panel moved while waiting', shifted, resting)
 ui.wait(lambda items: any(item.get('AXLabel') == catalog.text('auth.error.cancelledSignIn') for item in items), 'Missing cancellation error')
 ui.capture('error')

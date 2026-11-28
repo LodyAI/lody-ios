@@ -3,6 +3,7 @@ import {
   EphemeralStoreAdaptor,
   EphemeralStreamCrdt,
 } from '@loro-dev/streams-crdt/loro';
+import { streamsWebSocket, streamsWebSocketEnabled } from './live-read.ts';
 import type { MachinePresence } from '../models/machines.ts';
 import type { CreationOptions } from '../models/send.ts';
 
@@ -150,6 +151,16 @@ export function watchMachinePresence(
       const room = new EphemeralStreamCrdt({
         streamUrl: presenceURL(grant, workspace),
         auth: async () => (await getGrant()).token,
+        // A shard presence URL still joins over the grant gateway's pooled socket.
+        ...(streamsWebSocketEnabled
+          ? {
+              webSocket: streamsWebSocket(
+                getGrant,
+                grant.gatewayBaseUrl,
+                workspace,
+              ),
+            }
+          : {}),
         adaptor: EphemeralStoreAdaptor(store),
       });
       let joined = false;
@@ -176,9 +187,9 @@ export function watchMachinePresence(
         clearInterval(tick);
         detach();
         onSessionReader?.(undefined);
-        // Close transport before destroying its WASM store.
-        void room
-          .close()
+        // Close transport before destroying its WASM store. Only dispose
+        // releases the pooled WebSocket lease; `close` alone keeps it open.
+        void (streamsWebSocketEnabled ? room.disposeLegacy() : room.close())
           .catch(() => {})
           .finally(() => store.destroy());
       };
