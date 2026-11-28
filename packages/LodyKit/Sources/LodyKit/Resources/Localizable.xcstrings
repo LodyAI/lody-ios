@@ -30056,59 +30056,6 @@
         }
       }
     },
-    "native.chat.historySync.machine": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史来自目标机器"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History from the target machine"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "歷史來自目標電腦"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接続先のコンピュータから取得した履歴"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "대상 컴퓨터에서 가져온 기록"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historial del equipo de destino"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historique de l’ordinateur distant"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "История с целевого компьютера"
-          }
-        }
-      }
-    },
     "native.chat.historySync.ownerRequired": {
       "extractionState": "manual",
       "localizations": {
@@ -30423,59 +30370,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Повторяем попытку загрузить историю (HTTP %lld)"
-          }
-        }
-      }
-    },
-    "native.chat.historySync.streams": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史来自 Lody Streams"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History from Lody Streams"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "歷史來自 Lody Streams"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lody Streams から取得した履歴"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lody Streams에서 가져온 기록"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historial de Lody Streams"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historique de Lody Streams"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "История из Lody Streams"
           }
         }
       }
