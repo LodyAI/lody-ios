@@ -1213,6 +1213,11 @@ final class ChatComposerView: UIView, UITextViewDelegate {
     updateComposer()
     saveDraft()
   }
+  func focusDraft() {
+    guard state.editable else { return }
+    if !input.isFirstResponder { input.becomeFirstResponder() }
+    updateComposer()
+  }
   func setStoredDraft(_ text: String) {
     guard !text.isEmpty, input.text.isEmpty, quotes.isEmpty else { return }
     // Quote cards ride the draft envelope beside the editor state (`draftValue`).
