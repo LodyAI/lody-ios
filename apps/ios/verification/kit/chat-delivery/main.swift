@@ -18,4 +18,14 @@ assert(pending.first(where: { $0.kind == "user" })?.readState == "sending")
 assert(pending.contains { $0.kind == "delivery" && $0.actionable && $0.attention })
 assert(pending.first?.kind == "user" && pending.last?.kind == "delivery",
   "An unconfirmed persisted send keeps its delivery action below the user bubble")
+let durableAccepted = ChatPendingSend(id: "durable-1", text: "Hi", attachments: [], status: "Waiting", phase: "accepted", rpcAccepted: false)
+let durableRows = durableAccepted.rows(entries: [])
+assert(!durableRows.contains { $0.kind == "duration" },
+  "Durable handoff without RPC ACK must not infer an active running duration timer")
+assert(durableRows.contains { $0.kind == "delivery" && !$0.actionable && !$0.attention },
+  "Durable handoff without RPC ACK shows passive waiting status")
+let queuedUnknown = ChatPendingSend(id: "queued-1", text: "Hi", attachments: [], status: "Confirming", queue: true, phase: "unknown")
+let queuedRows = queuedUnknown.rows(entries: [])
+assert(queuedRows.contains { $0.kind == "delivery" && $0.actionable && $0.attention },
+  "Queued unknown send remains recoverable")
 print("User message delivery projection passed")

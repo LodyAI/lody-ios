@@ -220,7 +220,7 @@
     "retryPendingInput": {
       "params": "ForgetPendingInputParams",
       "result": "RetryPendingInputResult",
-      "timeoutMs": 30000
+      "timeoutMs": 60000
     },
     "scheduleCommand": {
       "params": "ScheduleCommandParams",
@@ -240,7 +240,7 @@
     "sendTurn": {
       "params": "SendTurnParams",
       "result": "SendTurnResult",
-      "timeoutMs": 45000
+      "timeoutMs": 90000
     },
     "sessionLiveStatus": {
       "params": "SessionLiveStatusParams",
@@ -3412,7 +3412,14 @@
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["pending", "accepted", "settled"]
+          "enum": [
+            "pending",
+            "accepted",
+            "queued",
+            "settled",
+            "not_saved",
+            "terminal"
+          ]
         }
       },
       "required": ["state"]
@@ -3739,7 +3746,8 @@
           "type": "object",
           "properties": {
             "state": { "type": "string", "const": "accepted" },
-            "id": { "type": "string" }
+            "id": { "type": "string" },
+            "rpcAccepted": { "type": "boolean" }
           },
           "required": ["state", "id"]
         }

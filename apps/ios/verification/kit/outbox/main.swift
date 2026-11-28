@@ -165,21 +165,50 @@ func record(_ id: String, phase: String = "waiting", sendId: String? = nil, extr
     let original = record("s1", phase: "unknown", sendId: "original")
     try await store.put(original).value
     let sender = SessionSender(sessionId: "s1", store: store, services: network.services, inflight: OutboxInflight())
+    sender.update(.init(userId: "u1", connected: true, session: SessionItem(id: "s1"), context: OutboxForeground(live: true)))
     defer { store.onChange = nil }
     try await sender.confirmPending("unrelated")
     precondition(sender.record?.phase == "unknown")
+    precondition(!sender.canSend, "Unknown delivery locks fresh sends until reconciled")
     try await sender.confirmPending("original")
-    precondition(sender.record == original.with(phase: "uploaded"), "Delivery confirmation preserves the original payload and identity")
-    precondition(disk.records("reconciled-input").first?.phase == "uploaded", "Confirmation must survive restart")
+    var expectedConfirmed = original.with(phase: "accepted")
+    expectedConfirmed.send["reason"] = nil
+    expectedConfirmed.send["rpcAccepted"] = .bool(false)
+    precondition(sender.record == expectedConfirmed, "Delivery confirmation preserves payload, unlocks composer, and does not infer active execution")
+    precondition(sender.canSend && !sender.awaitingReply, "Confirmed handoff without RPC ACK unlocks composer without inferring running")
+    precondition(disk.records("reconciled-input").first?.phase == "accepted", "Confirmation must survive restart")
     precondition(network.sent.isEmpty, "Reconciliation must not replay the original send")
+    let notSaved = record("s1", phase: "unknown", sendId: "not-saved")
+    try await store.put(notSaved).value
+    try await sender.markNotSaved("not-saved")
+    precondition(sender.record?.phase == "failed" && sender.record?.sendId == "not-saved" && sender.canSend,
+      "Authoritative not_saved transitions unknown to retryable failed keeping identity and payload")
+    let tombstoned = record("s1", phase: "unknown", sendId: "tombstoned")
+    try await store.put(tombstoned).value
+    try await sender.markTerminal("tombstoned", replacementId: "fresh-uuid")
+    precondition(sender.record?.phase == "failed" && sender.record?.sendId == "fresh-uuid" && sender.canSend,
+      "Terminal tombstone replaces the send ID so retry never replays a tombstoned ID")
+    let queuedUnknown = record("s1", phase: "unknown", sendId: "queued-id")
+    try await store.put(queuedUnknown).value
+    try await sender.markQueued("queued-id")
+    precondition(sender.record?.phase == "queued" && sender.record?.send["queue"] == .bool(true) && sender.canSend,
+      "Queued reconciliation transitions unknown to queued and unlocks composer")
     let replacement = record("s1", phase: "unknown", sendId: "replacement")
     try await store.put(replacement).value
     try await sender.confirmPending("original")
+    try await sender.markNotSaved("original")
+    try await sender.markTerminal("original")
+    try await sender.markQueued("original")
     try await sender.discardPending("original")
     precondition(sender.record == replacement, "Late exact-ID results cannot replace or remove a newer pending turn")
     try await sender.discardPending("replacement")
     precondition(sender.record == nil)
-    print("PASS: explicit handoff reconciliation confirms delivery without replay, survives restart, and fences late results by exact input")
+    // Durable handoff without RPC ACK from sendTurn also unlocks composer without awaitingReply.
+    let durableNet = Network()
+    durableNet.send = { _ in #"{"state":"accepted","id":"D-durable","rpcAccepted":false}"# }
+    let (_, durableStore, _) = await harness([record("s1", sendId: "D-durable")], durableNet, inputs: page(), foreground: "s1")
+    precondition(durableStore.snapshot.records.first?.phase == "accepted" && durableStore.snapshot.records.first?.send["rpcAccepted"] == .bool(false))
+    print("PASS: explicit handoff reconciliation confirms delivery without replay, handles not_saved/terminal/queued, survives restart, and fences late results by exact input")
   }
 
   @MainActor static func retryReferences() async throws {

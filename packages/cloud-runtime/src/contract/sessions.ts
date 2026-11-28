@@ -219,7 +219,16 @@ export const ForgetPendingInputParams = z
   .meta({ id: 'ForgetPendingInputParams' });
 
 export const RetryPendingInputResult = z
-  .object({ state: z.enum(['pending', 'accepted', 'settled']) })
+  .object({
+    state: z.enum([
+      'pending',
+      'accepted',
+      'queued',
+      'settled',
+      'not_saved',
+      'terminal',
+    ]),
+  })
   .meta({ id: 'RetryPendingInputResult' });
 export type RetryPendingInputResult = z.infer<typeof RetryPendingInputResult>;
 
@@ -284,7 +293,11 @@ export const SendTurnResult = z
       awaitingGuide: z.boolean().optional(),
     }),
     z.object({ state: z.literal('queued'), id: z.string() }),
-    z.object({ state: z.literal('accepted'), id: z.string() }),
+    z.object({
+      state: z.literal('accepted'),
+      id: z.string(),
+      rpcAccepted: z.boolean().optional(),
+    }),
   ])
   .meta({ id: 'SendTurnResult' });
 

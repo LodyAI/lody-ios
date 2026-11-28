@@ -1209,7 +1209,8 @@ extension ChatPendingSend {
   }
 
   func rows(entries: [ChatEntry]) -> [ChatRow] {
-    guard (queue != true || failed == true), !entries.contains(where: { $0.id == id && $0.isQueued }) else { return [] }
+    let recoverable = ["unknown", "uploaded"].contains(phase ?? "") && guide != true
+    guard (queue != true || failed == true || recoverable), !entries.contains(where: { $0.id == id && $0.isQueued }) else { return [] }
     var result: [ChatRow] = []
     if !entries.contains(where: { $0.id == id }) {
       let media = attachments.compactMap { attachment -> ChatMessageAttachment? in
@@ -1256,10 +1257,9 @@ extension ChatPendingSend {
       return entry.role == "assistant" && (entry.userTurnId ?? precedingUserID) == id
     }
     let hasDelivery = entries.contains { $0.id == id && $0.delivery != nil }
-    let acknowledged = phase == "accepted"
+    let acknowledged = phase == "accepted" && rpcAccepted != false
     if !hasReply && !acknowledged && !hasDelivery {
       let delivery = status.isEmpty ? String(localized: "send.status.awaitingConnection", bundle: .lody) : status
-      let recoverable = ["unknown", "uploaded"].contains(phase ?? "") && queue != true && guide != true
       let label = phase == "unknown" && !recoverable
         ? delivery + " · " + String(localized: "send.forget.hint", bundle: .lody)
         : delivery

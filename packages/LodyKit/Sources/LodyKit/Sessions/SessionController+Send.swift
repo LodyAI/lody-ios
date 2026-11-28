@@ -130,6 +130,9 @@ extension SessionController {
         switch result {
         case .settled: try await self.sender?.discardPending(id)
         case .accepted: try await self.sender?.confirmPending(id)
+        case .queued: try await self.sender?.markQueued(id)
+        case .notSaved: try await self.sender?.markNotSaved(id)
+        case .terminal: try await self.sender?.markTerminal(id)
         case .pending: break
         }
       } catch {

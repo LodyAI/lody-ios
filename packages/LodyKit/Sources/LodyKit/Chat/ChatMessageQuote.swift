@@ -1,4 +1,7 @@
+import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 extension NSAttributedString.Key {
   /// A sent quote's range in a user bubble; `ChatReferenceChipsView` draws its leading bar.
@@ -76,6 +79,7 @@ struct ChatMessageQuote: Codable, Equatable {
   static var tooLongMessage: String { String(localized: "native.chat.quote.tooLong", bundle: .lody) }
 }
 
+#if canImport(UIKit)
 /// The quoted passage drawn as in a message: a leading bar, secondary ink.
 private final class ChatQuoteSnapshotView: UIView {
   let text = UITextView()
@@ -368,3 +372,4 @@ final class ChatQuoteViewerController: UIViewController {
     ])
   }
 }
+#endif

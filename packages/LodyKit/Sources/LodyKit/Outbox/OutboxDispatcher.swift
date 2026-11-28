@@ -233,6 +233,14 @@ final class OutboxDispatcher {
         return
       }
       var next = record.with(phase: ["accepted", "uploaded", "queued"].contains(state) ? state : "unknown")
+      if state == "accepted", result["rpcAccepted"] == .bool(false) {
+        next.send["rpcAccepted"] = .bool(false)
+      } else {
+        next.send["rpcAccepted"] = nil
+      }
+      if state == "queued" {
+        next.send["queue"] = .bool(true)
+      }
       if let plan { next.send["guide"] = .bool(plan.guide) }
       try await store.put(next).value
     } catch {

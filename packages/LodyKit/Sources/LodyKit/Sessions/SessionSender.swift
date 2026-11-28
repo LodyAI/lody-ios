@@ -60,6 +60,7 @@ final class SessionSender {
 
   var awaitingReply: Bool {
     guard let record, record.creation == nil else { return false }
+    if record.phase == "accepted", record.send["rpcAccepted"] == .bool(false) { return false }
     return ["accepted", "uploaded"].contains(record.phase)
   }
 
@@ -123,9 +124,37 @@ final class SessionSender {
   func confirmPending(_ inputId: String) async throws {
     guard let store, let record, record.sendId == inputId else { return }
     guard ["unknown", "uploaded"].contains(record.phase), !dispatching else { throw OutboxError.scopeExpired }
-    // A dispatch ACK confirms delivery only. Keep the record until its reply;
-    // do not turn it into an inferred running timer.
-    try await store.put(record.with(phase: "uploaded")).value
+    // Durable handoff is confirmed; unlock the composer without inferring an active running timer.
+    var next = record.with(phase: "accepted")
+    next.send["reason"] = nil
+    next.send["rpcAccepted"] = .bool(false)
+    try await store.put(next).value
+  }
+
+  func markQueued(_ inputId: String) async throws {
+    guard let store, let record, record.sendId == inputId else { return }
+    guard ["unknown", "uploaded"].contains(record.phase), !dispatching else { throw OutboxError.scopeExpired }
+    var next = record.with(phase: "queued")
+    next.send["reason"] = nil
+    next.send["queue"] = .bool(true)
+    try await store.put(next).value
+  }
+
+  func markNotSaved(_ inputId: String) async throws {
+    guard let store, let record, record.sendId == inputId else { return }
+    guard ["unknown", "uploaded"].contains(record.phase), !dispatching else { throw OutboxError.scopeExpired }
+    // Authoritative server check proved the write never landed; unlock and keep payload retryable.
+    let next = record.with(phase: "failed", reason: "not_saved")
+    try await store.put(next).value
+  }
+
+  func markTerminal(_ inputId: String, replacementId: String = UUID().uuidString) async throws {
+    guard let store, let record, record.sendId == inputId else { return }
+    guard ["unknown", "uploaded"].contains(record.phase), !dispatching else { throw OutboxError.scopeExpired }
+    // Never replay a tombstoned input ID; mint a fresh UUID while preserving draft content.
+    var next = record.with(phase: "failed", reason: "input_already_terminal")
+    next.send["id"] = .string(replacementId)
+    try await store.put(next).value
   }
 
   func retry(_ id: String) {
