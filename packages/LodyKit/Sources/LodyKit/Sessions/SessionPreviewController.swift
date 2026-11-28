@@ -227,6 +227,7 @@ private final class SessionPreviewFixture {
       ],
       machineIds: ["preview-mac"], machineNames: ["preview-mac": "Preview Mac"], machineSimulators: ["preview-mac": "available"]
     )
+    if bar == "live" { catalog.projects[0].repoFullName = "Innei/lody-ios" }
     if bar == "simulator" { catalog.sessions[0].iosSimulatorPreviewRequestId = "native-fixture" }
     if bar == "archived" { catalog.sessions[0].archived = true }
     if bar == "bar-tabs", let root = catalog.sessions.first {
@@ -276,7 +277,10 @@ private final class SessionPreviewFixture {
       catalog.sessions[index].isTabClosed = closed
       record(closed ? "close-tab" : "restore-tab")
     case .archive(let archived):
-      if bar == "archive-error" { throw NSError(domain: "SessionPreview", code: 1) }
+      if bar == "archive-error" {
+        try await Task.sleep(for: .seconds(1))
+        throw NSError(domain: "SessionPreview", code: 1)
+      }
       catalog.sessions[index].archived = archived
       record(archived ? "archive" : "unarchive")
     case .owner(let userId):

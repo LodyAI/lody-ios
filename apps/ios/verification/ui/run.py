@@ -668,16 +668,22 @@ try:
                     # toggles eats the rest of a 300s budget.
                     check_timeout = 480
                 elif case == 'navigation':
-                    # Three cold relaunches plus catalog links; 360s still dies on a cold CI AXe session.
-                    check_timeout = 480
+                    # Cold relaunches, catalog links, interactive pop and conversation tabs on CI.
+                    check_timeout = 600
                 elif case == 'home':
                     # Create, Debug, Settings and workspace editing share this case; ~540s alone on the native inbox.
                     check_timeout = 600
                 elif case in ('session-search', 'mentions-production'):
                     # Long search and mention-kind loops reach ~290s alone.
                     check_timeout = 420
-                elif case in ('session-native', 'proposal-cards'):
-                    # Shared-feed actions or seven proposal scenes with captures and navigation.
+                elif case == 'session-native':
+                    # Shared-feed actions and AX captures can reach the old 600s budget before owner and reconnect checks.
+                    check_timeout = 720
+                elif case == 'create-parity':
+                    # Inline run configuration and project-picker captures take about 150s locally.
+                    check_timeout = 300
+                elif case == 'proposal-cards':
+                    # Seven proposal scenes with captures and navigation.
                     check_timeout = 420
                 elif case == 'ipad':
                     # Sidebar, both orientations, keyboard and two native creation flows.
