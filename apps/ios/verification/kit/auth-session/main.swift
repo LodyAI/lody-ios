@@ -71,8 +71,11 @@ actor ModeRefreshGate {
     visual.layoutIfNeeded()
     let metal = visual.subviews.compactMap { $0 as? MTKView }.first
     precondition(metal != nil, "The login Metal shader must compile on the simulator")
+    let scale = max(visual.traitCollection.displayScale, UIScreen.main.scale)
+    let cell = max(2, (1.5 * scale).rounded()) / scale
     let drawableSize = metal!.drawableSize
-    precondition(drawableSize == CGSize(width: 126, height: 120), "Login dither uses 3 pt cells")
+    precondition(drawableSize == CGSize(width: floor(378 / cell), height: floor(360 / cell)),
+                 "Login dither snaps 1.5 pt cells to whole pixels")
     visual.frame.size.height = 0
     visual.setNeedsLayout()
     visual.layoutIfNeeded()
@@ -81,7 +84,7 @@ actor ModeRefreshGate {
     visual.frame.size.height = 300
     visual.setNeedsLayout()
     visual.layoutIfNeeded()
-    precondition(metal!.drawableSize == CGSize(width: 126, height: 100),
+    precondition(metal!.drawableSize == CGSize(width: drawableSize.width, height: floor(300 / cell)),
                  "Reopening the login visual must resize to its new visible bounds")
     print("PASS: login Metal compiles and folding retains whole-cell rendering")
     let session = AuthSession()

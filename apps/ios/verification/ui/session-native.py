@@ -245,8 +245,9 @@ tap_label(more)
 tap_label(catalog.text('session.owner.change'))
 ui.capture('owner-submenu')
 tap_menu_item('Ada Lovelace')
-wait_probe('owner:preview-teammate', 'Change owner did not reach the session service')
-wait_text(catalog.text('session.owner.changed', name='Ada Lovelace'))
+ui.wait(lambda items: 'owner:preview-teammate' in probe(items).split(',')
+        and not any(i.get('AXLabel') == 'Ada Lovelace' for i in items),
+        'Change owner did not update the session and close the menu')
 
 tap_label(more)
 tap_label(catalog.text('session.action.find'))

@@ -26,7 +26,7 @@ enum SessionProse {
         if !separatePlan, item["type"] as? String == "tool_call", item["kind"] as? String == "switch_mode",
            let itemID = item["itemId"] as? String, let plan = item["plan"] as? String,
            !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          return Item(entryID: id, itemID: ChatItem.carriedPlanID(itemID), text: text(plan.trimmingCharacters(in: .whitespacesAndNewlines), role: "assistant"))
+          return Item(entryID: id, itemID: ChatCarriedPlan.itemID(itemID), text: text(plan.trimmingCharacters(in: .whitespacesAndNewlines), role: "assistant"))
         }
         guard let type = item["type"] as? String, ["text", "thought", "proposed_plan"].contains(type),
           type != "proposed_plan" || ["delta", "completed"].contains(item["status"] as? String ?? ""),

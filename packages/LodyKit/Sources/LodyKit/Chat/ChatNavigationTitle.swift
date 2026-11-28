@@ -252,6 +252,7 @@ enum ChatNavigationTitle {
     button.accessibilityLabel = [title, branch, subtitle, machine, status].filter { !$0.isEmpty }.joined(separator: ", ")
     button.sizeToFit()
     button.bounds.size.height = 44
+    button.setNeedsLayout()
   }
 
   static func apply(title: String, subtitle: String, button: UIButton, to item: UINavigationItem) {
