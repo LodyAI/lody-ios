@@ -180,16 +180,40 @@ final class ChatTabsOverlay: UIView {
     host.addChild(content)
     translatesAutoresizingMaskIntoConstraints = false
     root.addSubview(self)
-    heightConstraint = card.heightAnchor.constraint(equalToConstant: min(height, max(100, root.bounds.height - root.safeAreaInsets.top - root.safeAreaInsets.bottom - 32)))
-    NSLayoutConstraint.activate([
+    let safeFrame = root.safeAreaLayoutGuide.layoutFrame
+    let safeWidth = safeFrame.width > 0 ? safeFrame.width : (root.bounds.width - root.safeAreaInsets.left - root.safeAreaInsets.right)
+    let cardWidth = min(320, max(200, safeWidth - 2 * LodyLayout.screenPaddingX))
+    let maxHeight = max(100, root.bounds.height - root.safeAreaInsets.top - root.safeAreaInsets.bottom - 32)
+    heightConstraint = card.heightAnchor.constraint(equalToConstant: min(height, maxHeight))
+    let sourceInRoot = source.map { $0.convert($0.bounds, to: root) }
+    let inRightRail = sourceInRoot.map { safeFrame.width > 0 && $0.minX >= safeFrame.maxX - 1 } ?? false
+    let inLeftRail = sourceInRoot.map { safeFrame.width > 0 && $0.maxX <= safeFrame.minX + 1 } ?? false
+    var constraints: [NSLayoutConstraint] = [
       topAnchor.constraint(equalTo: root.topAnchor), bottomAnchor.constraint(equalTo: root.bottomAnchor),
       leadingAnchor.constraint(equalTo: root.leadingAnchor), trailingAnchor.constraint(equalTo: root.trailingAnchor),
-      // Below the directory button, aligned to the trailing controls.
-      card.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: LodySpacing.sm),
-      card.trailingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.trailingAnchor, constant: -LodyLayout.screenPaddingX),
-      card.widthAnchor.constraint(equalToConstant: min(320, max(200, root.bounds.width - 2 * LodyLayout.screenPaddingX))),
+      card.widthAnchor.constraint(equalToConstant: cardWidth),
       heightConstraint!,
-    ])
+    ]
+    if let sourceInRoot, inRightRail || inLeftRail {
+      // Anchored beside the vertical-bar side rail, kept fully inside the safe area.
+      let preferredTop = card.topAnchor.constraint(equalTo: root.topAnchor, constant: sourceInRoot.minY)
+      preferredTop.priority = .defaultHigh
+      constraints += [
+        preferredTop,
+        card.topAnchor.constraint(greaterThanOrEqualTo: root.safeAreaLayoutGuide.topAnchor, constant: LodySpacing.sm),
+        card.bottomAnchor.constraint(lessThanOrEqualTo: root.safeAreaLayoutGuide.bottomAnchor, constant: -LodySpacing.sm),
+        inLeftRail
+          ? card.leadingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.leadingAnchor, constant: LodyLayout.screenPaddingX)
+          : card.trailingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.trailingAnchor, constant: -LodyLayout.screenPaddingX),
+      ]
+    } else {
+      // Below the directory button, aligned to the trailing controls.
+      constraints += [
+        card.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: LodySpacing.sm),
+        card.trailingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.trailingAnchor, constant: -LodyLayout.screenPaddingX),
+      ]
+    }
+    NSLayoutConstraint.activate(constraints)
     content.didMove(toParent: host)
     root.layoutIfNeeded()
     UISelectionFeedbackGenerator().selectionChanged()

@@ -46,6 +46,17 @@ a vertical bar on the trailing edge. The status bar becomes vertical too.
   and never makes the fold a column boundary.
 - `UIView.reservedRegions(kind: .occlusion)` includes the status-bar column of the
   vertical bar. The safe area already covers it.
+- Because `SessionController` owns its own header (`LodyPageOwnedHeader`) and hides
+  `UINavigationBar`, the trailing `84 pt` vertical bar below the status occlusion would
+  otherwise sit empty. When `traitCollection.verticalBarEdge != .unspecified` and
+  `LodyVerticalBarRail.placement(...)` confirms safe room below `occlusion` regions and
+  above the docked keyboard and any horizontal `division`, `SessionController` moves the
+  same `tabsButton` (when multiple Tabs exist) and `moreButton` into a centered `44 pt`
+  vertical stack (`chat-side-rail`) in that strip, freeing `52–104 pt` for the
+  conversation title and anchoring `ChatTabsOverlay` beside the rail inside the safe
+  area. Whenever space or the vertical bar disappears (unfolded portrait, inspector open
+  beside chat, early mount with empty occlusions, or tight occlusion/keyboard overlap),
+  both controls fall back into `pageHeader`.
 
 ## Two panes at the fold
 
@@ -128,14 +139,15 @@ placement="left" | "right"`, `Stack.SearchBar` and `Stack.Screen` options regist
 
 All paths below are under `packages/LodyKit/Sources/LodyKit`.
 
-| Concern                                  | File                                                  |
-| ---------------------------------------- | ----------------------------------------------------- |
-| Available-space and posture policy       | `Chrome/LodyHomeLayout.swift`                         |
-| Split, fold, Sheet and popover ownership | `Shell/HomeController.swift`, `Shell/LodyShell.swift` |
-| Native arrangement and hinge             | `Chrome/LodyFoldHost.swift`                           |
-| Page close and rehosting lifecycle       | `Shell/LodyPageController.swift`                      |
-| Chat safe area                           | `Chat/LodyChatView.swift`                             |
-| Toast band and canvas                    | `Toast/LodyToastOverlay.swift`                        |
+| Concern                                  | File                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| Available-space and posture policy       | `Chrome/LodyHomeLayout.swift`                                          |
+| Split, fold, Sheet and popover ownership | `Shell/HomeController.swift`, `Shell/LodyShell.swift`                  |
+| Native arrangement and hinge             | `Chrome/LodyFoldHost.swift`                                            |
+| Vertical-bar conversation side rail      | `Chrome/LodyVerticalBarRail.swift`, `Sessions/SessionController.swift` |
+| Page close and rehosting lifecycle       | `Shell/LodyPageController.swift`                                       |
+| Chat safe area                           | `Chat/LodyChatView.swift`                                              |
+| Toast band and canvas                    | `Toast/LodyToastOverlay.swift`                                         |
 
 The approved design is in `docs/superpowers/specs/2026-10-28-duo-ipad-native-layout.md`.
 

@@ -322,4 +322,105 @@ final class SessionMoreMenuTests: XCTestCase {
     XCTAssertTrue(SessionRemotePreview.isBrowserServerStoppedError("local_server_unreachable"))
     XCTAssertFalse(SessionRemotePreview.isBrowserServerStoppedError("tunnel_creation_failed"))
   }
+
+  func testSideRailMovesTabsAndMoreOutOfPageHeaderAndRestoresOnFallback() {
+    let root = SessionItem(id: "tab-root", title: "Long conversation title for Duo outer display", status: "idle")
+    let sibling = SessionItem(id: "tab-child", title: "Second tab", status: "idle", parentSessionId: root.id)
+    let controller = makeController(
+      session: root,
+      extraSessions: [sibling],
+      layout: StatusViewLayout()
+    )
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678))
+    window.rootViewController = controller
+    window.makeKeyAndVisible()
+    controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 84)
+    controller.view.layoutIfNeeded()
+
+    func findView(_ id: String, in root: UIView) -> UIView? {
+      if root.accessibilityIdentifier == id { return root }
+      for subview in root.subviews {
+        if let found = findView(id, in: subview) { return found }
+      }
+      return nil
+    }
+
+    guard let header = findView("chat-page-header", in: controller.view) as? UIStackView,
+          let rail = findView("chat-side-rail", in: controller.view) as? UIStackView,
+          let tabs = findView("chat-directory-tabs", in: controller.view),
+          let more = findView("chat-more", in: controller.view),
+          let title = findView("chat-navigation-title", in: controller.view) else {
+      return XCTFail("Expected header, side rail, tabs, more and title views")
+    }
+
+    // Default state (no vertical bar): controls remain in pageHeader and side rail is hidden.
+    XCTAssertTrue(rail.isHidden)
+    XCTAssertTrue(header.arrangedSubviews.contains(tabs))
+    XCTAssertTrue(header.arrangedSubviews.contains(more))
+    let headerTitleWidth = title.bounds.width
+
+    // Activate vertical-bar side rail through the real viewDidLayoutSubviews -> updateSideRail pipeline.
+    let statusOcclusion = [CGRect(x: 382, y: 0, width: 84, height: 174)]
+    controller.sideRailEnvironment = {
+      LodyVerticalBarRail.Environment(
+        systemHasVerticalBar: true,
+        occlusions: statusOcclusion,
+        keyboardFrame: CGRect(x: 0, y: 342, width: 466, height: 336)
+      )
+    }
+    controller.view.setNeedsLayout()
+    controller.view.layoutIfNeeded()
+
+    let expectedFrame = CGRect(x: 402, y: 186, width: 44, height: 98)
+    XCTAssertFalse(rail.isHidden)
+    XCTAssertEqual(rail.frame, expectedFrame)
+    XCTAssertTrue(rail.arrangedSubviews.contains(tabs))
+    XCTAssertTrue(rail.arrangedSubviews.contains(more))
+    XCTAssertFalse(header.arrangedSubviews.contains(tabs))
+    XCTAssertFalse(header.arrangedSubviews.contains(more))
+    XCTAssertGreaterThan(title.bounds.width, headerTitleWidth + 80, "Moving Tabs and More to the side rail must widen the conversation title")
+
+    // VoiceOver order puts pageHeader -> sideRail -> chat.
+    let elements = controller.view.accessibilityElements as? [UIView]
+    XCTAssertEqual(elements?.prefix(3).map(ObjectIdentifier.init), [
+      ObjectIdentifier(header),
+      ObjectIdentifier(rail),
+      ObjectIdentifier(controller.chat),
+    ])
+
+    // Opening ChatTabsOverlay from the right-rail button anchors the card beside the rail inside the safe area.
+    let overlay = ChatTabsOverlay.present(
+      ChatTabsPanel(
+        state: ChatTabsState(
+          tabs: [
+            ChatTabItem(id: root.id, title: root.title, attention: nil, current: true),
+            ChatTabItem(id: sibling.id, title: sibling.title, attention: nil, current: false),
+          ],
+          closed: []
+        ),
+        onSelect: { _ in }, onClose: { _ in }, onRestore: { _ in }
+      ),
+      tabs: 2,
+      in: controller,
+      source: tabs
+    )
+    controller.view.layoutIfNeeded()
+    let cardFrame = overlay.subviews.first!.frame
+    XCTAssertLessThanOrEqual(cardFrame.maxX, 382 - 16 + 0.5, "Tabs card must remain inside the safe area beside the vertical bar")
+    XCTAssertGreaterThanOrEqual(cardFrame.minY, 180, "Tabs card must anchor vertically near the side-rail Tabs button")
+    overlay.removeFromSuperview()
+
+    // Fallback (e.g. unfolded portrait or missing occlusion) restores both controls to pageHeader.
+    controller.sideRailEnvironment = {
+      LodyVerticalBarRail.Environment(systemHasVerticalBar: false, occlusions: [])
+    }
+    controller.view.setNeedsLayout()
+    controller.view.layoutIfNeeded()
+
+    XCTAssertTrue(rail.isHidden)
+    XCTAssertTrue(header.arrangedSubviews.contains(tabs))
+    XCTAssertTrue(header.arrangedSubviews.contains(more))
+    XCTAssertEqual(header.arrangedSubviews.suffix(2), [tabs, more])
+    XCTAssertNil(controller.view.accessibilityElements)
+  }
 }

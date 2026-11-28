@@ -79,6 +79,10 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   private let sidebarButton = UIButton(type: .system)
   private var sidebarAction: UIAction?
   private let pageHeader = UIStackView()
+  private let sideRail = UIStackView()
+  private let rootView = SessionRootView()
+  private var usingSideRail = false
+  var sideRailEnvironment: (() -> LodyVerticalBarRail.Environment)?
   private lazy var tabsButton: DirectoryTabsButton = {
     let button = DirectoryTabsButton()
     button.addAction(UIAction { [weak self] _ in self?.presentTabs() }, for: .touchUpInside)
@@ -164,12 +168,25 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   // The chat binds its title and scroll edges to its nearest controller; the shell page shows this item.
   override var navigationItem: UINavigationItem { parent?.navigationItem ?? super.navigationItem }
 
+  override func loadView() {
+    rootView.onReservedRegionsChanged = { [weak self] in self?.view.setNeedsLayout() }
+    view = rootView
+  }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     chat.pageOwnsHeader = true
     view.backgroundColor = .lodyBackground
     view.addSubview(chat)
     installPageHeader()
+    installKeyboardProbe()
+    #if compiler(>=6.4)
+    if #available(iOS 27.1, *) {
+      registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (self: SessionController, _) in
+        self.view.setNeedsLayout()
+      }
+    }
+    #endif
     wireEvents()
     find(query: findQuery, keyboard: false)
     wireSendEvents()
@@ -213,6 +230,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     updatePageBack()
+    view.setNeedsLayout()
     renderPermission()
   }
 
@@ -485,9 +503,102 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     }
   }
 
+  override func viewSafeAreaInsetsDidChange() {
+    super.viewSafeAreaInsetsDidChange()
+    view.setNeedsLayout()
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    updateSideRail()
+  }
+
   private func updateHeaderButtons() {
     moreButton.isHidden = isDraftTab && closedDirectoryTabs.isEmpty
     tabsButton.isHidden = directoryTabs.count <= 1
+    tabsButton.largeContentTitle = tabsButton.accessibilityLabel
+    updateSideRail()
+  }
+
+  private func installKeyboardProbe() {
+    let probe = UIView()
+    probe.isHidden = true
+    probe.isUserInteractionEnabled = false
+    probe.isAccessibilityElement = false
+    probe.accessibilityElementsHidden = true
+    probe.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(probe)
+    rootView.ignoredAccessibilityViews.insert(ObjectIdentifier(probe))
+    NSLayoutConstraint.activate([
+      probe.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      probe.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      probe.topAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+      probe.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+  }
+
+  private func updateSideRail() {
+    guard isViewLoaded else { return }
+    let visibleCount = (tabsButton.isHidden ? 0 : 1) + (moreButton.isHidden ? 0 : 1)
+    let env: LodyVerticalBarRail.Environment
+    if let sideRailEnvironment {
+      env = sideRailEnvironment()
+    } else {
+      var systemHasVerticalBar = false
+      var occlusions = rootView.occlusions
+      var divisions = rootView.divisions
+      #if compiler(>=6.4)
+      if #available(iOS 27.1, *) {
+        systemHasVerticalBar = traitCollection.verticalBarEdge != .unspecified
+        let liveOcclusions = view.reservedRegions(kind: .occlusion).map(\.frame)
+        let liveDivisions = view.reservedRegions(kind: .division).map(\.frame)
+        if !liveOcclusions.isEmpty || !occlusions.isEmpty { occlusions = liveOcclusions }
+        if !liveDivisions.isEmpty || !divisions.isEmpty { divisions = liveDivisions }
+      }
+      #endif
+      env = LodyVerticalBarRail.Environment(
+        systemHasVerticalBar: systemHasVerticalBar,
+        occlusions: occlusions,
+        divisions: divisions,
+        keyboardFrame: view.keyboardLayoutGuide.layoutFrame
+      )
+    }
+    let placement = LodyVerticalBarRail.placement(
+      in: view.bounds,
+      systemHasVerticalBar: env.systemHasVerticalBar,
+      safeArea: view.safeAreaInsets,
+      occlusions: env.occlusions,
+      divisions: env.divisions,
+      keyboardFrame: env.keyboardFrame,
+      itemCount: visibleCount
+    )
+    applySideRail(placement: placement)
+  }
+
+  func applySideRail(placement: LodyVerticalBarRail.Placement?) {
+    let shouldUseRail = placement != nil
+    if shouldUseRail != usingSideRail {
+      usingSideRail = shouldUseRail
+      let target: UIStackView = shouldUseRail ? sideRail : pageHeader
+      let previous: UIStackView = shouldUseRail ? pageHeader : sideRail
+      for button in [tabsButton, moreButton] as [UIButton] {
+        previous.removeArrangedSubview(button)
+        button.removeFromSuperview()
+        target.addArrangedSubview(button)
+      }
+      UIAccessibility.post(notification: .layoutChanged, argument: nil)
+    }
+    if let placement {
+      sideRail.isHidden = false
+      sideRail.accessibilityElementsHidden = false
+      if sideRail.frame != placement.frame {
+        sideRail.frame = placement.frame
+      }
+      view.bringSubviewToFront(sideRail)
+    } else {
+      sideRail.isHidden = true
+      sideRail.accessibilityElementsHidden = true
+    }
   }
 
   /// Built on demand when the More button opens (uncached), so background catalog/status
@@ -580,6 +691,10 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     backButton.addAction(UIAction { [weak self] _ in self?.goBack() }, for: .touchUpInside)
     moreButton.accessibilityIdentifier = "chat-more"
     moreButton.accessibilityLabel = String(localized: "common.more", bundle: .lody)
+    moreButton.showsLargeContentViewer = true
+    moreButton.scalesLargeContentImage = true
+    moreButton.largeContentTitle = moreButton.accessibilityLabel
+    moreButton.largeContentImage = UIImage(systemName: "ellipsis")
     moreButton.showsMenuAsPrimaryAction = true
     moreButton.menu = UIMenu(children: [
       UIDeferredMenuElement.uncached { [weak self] completion in
@@ -591,9 +706,19 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     tabsConfiguration.baseForegroundColor = .label
     tabsConfiguration.cornerStyle = .capsule
     tabsButton.configuration = tabsConfiguration
+    tabsButton.showsLargeContentViewer = true
+    tabsButton.scalesLargeContentImage = true
+    tabsButton.largeContentImage = tabsConfiguration.image
     sidebarButton.isHidden = sidebarAction == nil
     NSLayoutConstraint.activate([sidebarButton.widthAnchor.constraint(equalToConstant: 44), sidebarButton.heightAnchor.constraint(equalToConstant: 44)])
     for control in [sidebarButton, backButton, chat.titleButton, tabsButton, moreButton] { pageHeader.addArrangedSubview(control) }
+    sideRail.axis = .vertical
+    sideRail.alignment = .center
+    sideRail.spacing = LodyVerticalBarRail.spacing
+    sideRail.accessibilityIdentifier = "chat-side-rail"
+    sideRail.isHidden = true
+    sideRail.accessibilityElementsHidden = true
+    sideRail.addInteraction(UILargeContentViewerInteraction())
     chat.titleButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
     chat.titleButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     // Let UIKit shape the existing soft scroll edge around the page-owned controls.
@@ -604,6 +729,11 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     tint.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(tint)
     view.addSubview(pageHeader)
+    view.addSubview(sideRail)
+    rootView.headerView = pageHeader
+    rootView.sideRailView = sideRail
+    rootView.chatView = chat
+    rootView.ignoredAccessibilityViews.insert(ObjectIdentifier(tint))
     NSLayoutConstraint.activate([
       tint.topAnchor.constraint(equalTo: view.topAnchor),
       tint.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -879,6 +1009,50 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   }
 }
 #endif
+
+/// Observes UIKit reserved regions for the vertical-bar side rail and preserves logical
+/// VoiceOver order (page header → side rail → transcript/composer) when the rail is shown.
+@MainActor
+private final class SessionRootView: UIView {
+  var onReservedRegionsChanged: (() -> Void)?
+  private(set) var occlusions: [CGRect] = []
+  private(set) var divisions: [CGRect] = []
+  weak var headerView: UIView?
+  weak var sideRailView: UIView?
+  weak var chatView: UIView?
+  var ignoredAccessibilityViews: Set<ObjectIdentifier> = []
+
+  override func updateConstraints() {
+    #if compiler(>=6.4)
+    if #available(iOS 27.1, *) {
+      let nextOcclusions = reservedRegions(kind: .occlusion).map(\.frame)
+      let nextDivisions = reservedRegions(kind: .division).map(\.frame)
+      if nextOcclusions != occlusions || nextDivisions != divisions {
+        occlusions = nextOcclusions
+        divisions = nextDivisions
+        onReservedRegionsChanged?()
+      }
+    }
+    #endif
+    super.updateConstraints()
+  }
+
+  override var accessibilityElements: [Any]? {
+    get {
+      guard let sideRailView, !sideRailView.isHidden else { return nil }
+      var ordered: [UIView] = []
+      if let headerView { ordered.append(headerView) }
+      ordered.append(sideRailView)
+      if let chatView { ordered.append(chatView) }
+      let known = Set(ordered.map(ObjectIdentifier.init)).union(ignoredAccessibilityViews)
+      for subview in subviews where !subview.isHidden && !subview.accessibilityElementsHidden && !known.contains(ObjectIdentifier(subview)) {
+        ordered.append(subview)
+      }
+      return ordered
+    }
+    set {}
+  }
+}
 
 /// Canvas tint only: UIKit retains ownership of the underlying soft-edge blur.
 @MainActor
