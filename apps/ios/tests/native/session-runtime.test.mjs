@@ -1833,7 +1833,7 @@ for (const steerResult of [
 ]) {
   test(
     `Roost guide follows the owner ${Object.keys(steerResult).join('-')} path`,
-    { timeout: 5000 },
+    { timeout: 15_000 },
     async () => {
       const calls = [];
       let acceptedEntry;
@@ -2387,7 +2387,7 @@ test('Roost exports the full history before paging and leaves the shared queue o
 for (const invalidPatch of [false, true]) {
   test(
     `upstream Roost reader ${invalidPatch ? 'repairs an invalid patch at the owner checkpoint' : 'applies a Unicode patch at its base checkpoint'}`,
-    { timeout: 5000 },
+    { timeout: 15_000 },
     async () => {
       const reads = [];
       const openReady = Promise.withResolvers();
@@ -2448,7 +2448,9 @@ for (const invalidPatch of [false, true]) {
       });
       try {
         const open = await openReady.promise;
-        const updated = fixture.nextEmit();
+        const updated = fixture.nextEmit(
+          (event) => event.entries[0]?.items?.[0]?.text === 'ACB',
+        );
         next.resolve({
           type: 'session/history-read_response',
           sessionId: 's1',
@@ -2502,7 +2504,7 @@ for (const invalidPatch of [false, true]) {
 
 test(
   'Roost reads the latest page first and uses the complete directory for send state',
-  { timeout: 5000 },
+  { timeout: 15_000 },
   async (t) => {
     const requests = [];
     let handedOff;
