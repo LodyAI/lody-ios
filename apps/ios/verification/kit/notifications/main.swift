@@ -145,3 +145,49 @@ registration.identify(user: nil, credential: nil)
 await registration.drain()
 precondition(backend.binding == nil)
 print("PASS: failed cleanup stays push-scoped and does not fence safe replacement")
+
+// Direct-APNs ActivityKit token sync must wait for confirmed installation registration,
+// re-sync on each committed registration epoch, retry failed uploads, and stop on logout/switch.
+let activitySync = ActivityTokenSync()
+var syncEvents: [ActivityTokenSync.Action] = []
+var activityRegistration: PushRegistration!
+activityRegistration = PushRegistration(installation: "activity-fixture", call: backend.call, changed: { provider, isRegistered in
+  let action = activitySync.transition(
+    provider: provider,
+    authorized: activityRegistration.authorized,
+    registered: isRegistered,
+    session: activityRegistration.session,
+    registrationEpoch: activityRegistration.registrationEpoch
+  )
+  if action != .unchanged { syncEvents.append(action) }
+}, failure: {})
+backend.configuration = Data(#"{"selfHostedEnabled":true}"#.utf8)
+activityRegistration.identify(user: "alice", credential: "session-1")
+activityRegistration.refresh(authorized: true)
+await activityRegistration.drain()
+precondition(syncEvents.isEmpty && activitySync.active == nil, "ActivityKit token upload must wait until pushSubscriptions:register commits")
+activityRegistration.deviceToken(String(repeating: "ef", count: 32), bundle: "ai.lody.actual-test-app")
+activityRegistration.refresh(authorized: true)
+await activityRegistration.drain()
+let firstTarget = ActivityTokenSync.Target(
+  session: PushRegistration.Session(user: "alice", credential: "session-1", installation: "activity-fixture"),
+  epoch: 1
+)
+precondition(syncEvents == [.start(firstTarget)], "first committed registration starts ActivityKit token upload")
+activityRegistration.refresh(authorized: true)
+await activityRegistration.drain()
+let secondTarget = ActivityTokenSync.Target(session: firstTarget.session, epoch: 2)
+precondition(syncEvents == [.start(firstTarget), .start(secondTarget)], "re-registration advances epoch so ActivityKit tokens re-upload after server-side resets without tearing down mid-refresh")
+activitySync.recordUploadFailure(for: firstTarget)
+precondition(
+  activitySync.transition(provider: .apns, authorized: true, registered: true, session: firstTarget.session, registrationEpoch: 2) == .unchanged,
+  "stale upload failure from an older epoch must not retrigger sync"
+)
+activitySync.recordUploadFailure(for: secondTarget)
+precondition(
+  activitySync.transition(provider: .apns, authorized: true, registered: true, session: firstTarget.session, registrationEpoch: 2) == .start(secondTarget),
+  "current-epoch upload failure retries on next refresh"
+)
+activityRegistration.identify(user: nil, credential: nil)
+precondition(syncEvents.last == .stop && activitySync.active == nil, "logout immediately fences ActivityKit token upload")
+print("PASS: ActivityKit token registration gating, epoch re-sync, failure retry and logout fencing")

@@ -46,11 +46,13 @@ final class ConversationActivities {
     }
     guard enabled, let workspace, !list.loading else { return }
     let state = Self.summary(list)
-    guard !state.items.isEmpty else {
+    // Match backend syncLiveActivitySummary: unread history alone never keeps an activity alive.
+    let activeCount = state.statusCounts.running + state.statusCounts.permission + state.statusCounts.question
+    guard activeCount > 0, !state.items.isEmpty else {
       await existing?.end(nil, dismissalPolicy: .immediate)
       return
     }
-    let content = ActivityContent(state: state, staleDate: Date(timeIntervalSinceNow: 300))
+    let content = ActivityContent(state: state, staleDate: Date(timeIntervalSinceNow: 1800))
     if let existing {
       let old = existing.content.state
       if old.items != state.items || old.statusCounts != state.statusCounts || existing.activityState == .stale {
