@@ -133,3 +133,31 @@ let zeroLineData = Data(#"{"id":"files","diff":{"add":0,"del":0,"files":2}}"#.ut
 let decodedZeroLine = try JSONDecoder().decode(SessionItem.self, from: zeroLineData)
 check(decodedZeroLine.diff["files"] == 2 && bar(decodedZeroLine).hasDiff, "Catalog decoding preserves file counts independently of text lines")
 print("PASS: zero-line and mixed workspace summaries retain the review entry")
+
+// Any valid GitHub PR link opens the native PR page (same-repo, cross-repo, or no-repo); non-PR links return nil.
+let projectRepos = ["Lody/Zed", "lody/docs"]
+let knownPr = SessionPullRequest(repository: "Lody/Zed", number: 7, status: "draft", ci: "p", url: "https://github.com/Lody/Zed/pull/7")
+let sameRepoLink = ChatPullRequestLink("https://github.com/lody/zed/pull/7/files?w=1#diff")
+check(sameRepoLink != nil, "same-repo PR sub-page parses")
+check(sameRepoLink!.resolved(known: [knownPr], projectRepositories: projectRepos) == knownPr, "known same-repo PR preserves catalog metadata")
+
+let sameRepoOther = ChatPullRequestLink("http://www.github.com/lody/docs/pull/12")
+check(sameRepoOther?.resolved(known: [knownPr], projectRepositories: projectRepos) == SessionPullRequest(repository: "lody/docs", number: 12, status: "", ci: nil, url: "https://github.com/lody/docs/pull/12"), "project member PR normalizes repository casing")
+
+let crossRepoLink = ChatPullRequestLink("https://github.com/other/zed/pull/7")
+check(crossRepoLink?.resolved(known: [knownPr], projectRepositories: projectRepos) == SessionPullRequest(repository: "other/zed", number: 7, status: "", ci: nil, url: "https://github.com/other/zed/pull/7"), "cross-repo PR opens its own owner/repo without matching unrelated session PRs")
+
+let noRepoLink = ChatPullRequestLink("https://github.com/facebook/react/pull/30000/commits")
+check(noRepoLink?.resolved(known: [], projectRepositories: []) == SessionPullRequest(repository: "facebook/react", number: 30000, status: "", ci: nil, url: "https://github.com/facebook/react/pull/30000"), "session without repository binding still opens GitHub PRs")
+
+for ignored in [
+  "https://github.com/lody/zed/issues/7",
+  "https://github.com/lody/zed/pull/+7",
+  "https://github.com/lody/zed/pull/0",
+  "https://github.com/../zed/pull/7",
+  "https://github.com/lody/../pull/7",
+  "https://gist.github.com/lody/zed/pull/7",
+] {
+  check(ChatPullRequestLink(ignored) == nil, "non-PR or malformed URL stays external: \(ignored)")
+}
+print("PASS: GitHub PR link resolution accepts same-repo, cross-repo and no-repo targets while ignoring non-PR links")

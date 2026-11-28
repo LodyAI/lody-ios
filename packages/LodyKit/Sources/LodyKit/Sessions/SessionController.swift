@@ -68,8 +68,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   var optionsRefresh: Task<Void, Never>?
   var connectingShown = false
   var connectingTask: Task<Void, Never>?
-  /// The open run-config sheet's rows, refreshed when the computer's options arrive.
-  weak var runConfigPanel: CreatePanelState?
+  /// The open run-config sheet, refreshed when the computer's options arrive.
+  weak var runConfigSheet: CreateRunConfigSheetController?
   private let initialChoice: ModelChoice?
   private var observers: [NSObjectProtocol] = []
   private var findToken = 0
@@ -245,9 +245,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
           await WorkspaceMembers.load(userId: state.userId, workspaceId: state.workspaceId) { [weak self] members in
             guard let self, self.source.state.key == state.key else { return }
             self.chat.members = members
-            // Change owner lists the members, so the menu follows the loaded list.
-            if let session = self.source.state.catalog.session(self.sessionId) {
-              self.updateMoreMenu(session)
+            if self.source.state.catalog.session(self.sessionId) != nil {
               self.render()
             }
           }
@@ -330,7 +328,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     }
     renderMentions(state, session)
     renderFeed(session)
-    updateMoreMenu(session)
+    updateHeaderButtons()
   }
 
   private func startFeed(_ state: SessionListState) {
@@ -486,25 +484,24 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     }
   }
 
-  private func updateMoreMenu(_ session: SessionItem) {
+  private func updateHeaderButtons() {
+    moreButton.isHidden = isDraftTab && closedDirectoryTabs.isEmpty
+    tabsButton.isHidden = directoryTabs.count <= 1
+  }
+
+  /// Built on demand when the More button opens (uncached), so background catalog/status
+  /// renders never replace an open `UIMenu` and cause UIKit to reload/flash it.
+  func moreMenuElements() -> [UIMenuElement] {
+    if isDraftTab {
+      guard !closedDirectoryTabs.isEmpty else { return [] }
+      return [UIAction(title: String(localized: "session.tabs.closed", bundle: .lody), image: UIImage(systemName: "clock.arrow.circlepath")) { [weak self] _ in
+        self?.presentTabs(showClosed: true)
+      }]
+    }
+    guard let session = activeSession else { return [] }
     let state = source.state
     let canManage = !StatusViewActions.readOnly(state)
     let deleting = SessionActions.isDeleting(state.workspaceId, sessionId)
-    let more = moreButton
-    more.accessibilityLabel = String(localized: "common.more", bundle: .lody)
-    if isDraftTab {
-      var children: [UIMenuElement] = []
-      if !closedDirectoryTabs.isEmpty {
-        children.append(UIAction(title: String(localized: "session.tabs.closed", bundle: .lody), image: UIImage(systemName: "clock.arrow.circlepath")) { [weak self] _ in
-          self?.presentTabs(showClosed: true)
-        })
-      }
-      more.menu = UIMenu(children: children)
-      more.isHidden = children.isEmpty
-      tabsButton.isHidden = directoryTabs.count <= 1
-      return
-    }
-    more.isHidden = false
     var changes: [UIMenuElement] = []
     if reviewable {
       changes.append(UIAction(title: String(localized: "workspaceChanges.title", bundle: .lody), image: UIImage(systemName: "plus.forwardslash.minus")) {
@@ -542,6 +539,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     children.append(UIAction(title: String(localized: "session.action.share", bundle: .lody), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
       self?.perform("share")
     })
+    if let status = statusMenu(session) {
+      children.append(status)
+    }
     if canManage {
       children.append(UIAction(
         title: String(localized: String.LocalizationValue(session.archived ? "session.action.unarchive" : "session.action.archive"), bundle: .lody),
@@ -554,8 +554,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
         ) { [weak self] _ in self?.perform("delete") },
       ]))
     }
-    more.menu = UIMenu(children: children)
-    tabsButton.isHidden = directoryTabs.count <= 1
+    return children
   }
 
 
@@ -576,7 +575,13 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     backButton.accessibilityLabel = String(localized: "common.back", bundle: .lody)
     backButton.addAction(UIAction { [weak self] _ in self?.goBack() }, for: .touchUpInside)
     moreButton.accessibilityIdentifier = "chat-more"
+    moreButton.accessibilityLabel = String(localized: "common.more", bundle: .lody)
     moreButton.showsMenuAsPrimaryAction = true
+    moreButton.menu = UIMenu(children: [
+      UIDeferredMenuElement.uncached { [weak self] completion in
+        completion(self?.moreMenuElements() ?? [])
+      }
+    ])
     var tabsConfiguration = UIButton.Configuration.lodyGlass()
     tabsConfiguration.image = tabsButton.image(for: .normal)
     tabsConfiguration.baseForegroundColor = .label

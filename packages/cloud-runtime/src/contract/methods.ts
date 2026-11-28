@@ -45,6 +45,8 @@ import {
   ScheduleDetailParams,
   SchedulesParams,
   SchedulesResult,
+  SessionLiveStatusParams,
+  SessionLiveStatusResult,
 } from './schedules.ts';
 import {
   OpenSessionParams,
@@ -74,12 +76,7 @@ import {
   SessionSubscriptionsEvent,
   SessionTraceEvent,
 } from './session-events.ts';
-import {
-  PromptShortcutsParams,
-  PromptShortcutsResult,
-  ShortcutCloudParams,
-  ShortcutCloudResult,
-} from './shortcuts.ts';
+import { PromptShortcutsParams, PromptShortcutsResult } from './shortcuts.ts';
 import {
   DiagnosticEvent,
   MachinePresence,
@@ -153,7 +150,6 @@ export type {
 export type { CreationOptions } from './projects.ts';
 export type { SessionRuntimeEvent, SessionTrace } from './session-events.ts';
 export type { ShareRequestParams } from './sharing.ts';
-export type { ShortcutCloudParams } from './shortcuts.ts';
 
 export type CallSpec = {
   params: z.ZodType;
@@ -263,6 +259,11 @@ export const runtimeCalls = {
     params: ScheduleCommandParams,
     result: ScheduleCommandResult,
     timeoutMs: 70_000,
+  },
+  sessionLiveStatus: {
+    params: SessionLiveStatusParams,
+    result: SessionLiveStatusResult,
+    timeoutMs: 15_000,
   },
   localProjects: {
     params: LocalProjectsParams,
@@ -432,11 +433,6 @@ export const runtimeCalls = {
 
 export const hostCalls = {
   grant: { params: Empty, result: Grant, timeoutMs: 30_000 },
-  shortcutCloud: {
-    params: ShortcutCloudParams,
-    result: ShortcutCloudResult,
-    timeoutMs: 20_000,
-  },
   githubMentions: {
     params: GitHubMentionsParams,
     result: GitHubMentionsResult,

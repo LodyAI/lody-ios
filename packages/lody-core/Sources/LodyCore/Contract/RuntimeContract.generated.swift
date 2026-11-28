@@ -3,7 +3,7 @@ import Foundation
 
 extension RuntimeContract {
   public static let version = 1
-  public static let runtimeMethods: [String] = ["agentProviderAuth","agentProviderDetail","agentProviderOperation","agentProviderProbe","agentProviders","agentRoles","androidEmulatorControl","archiveSession","checkTurnQuota","closeSession","controlTurn","conversationMarkdown","conversationShareMessages","createSession","createTab","creationOptions","decideProposal","deleteSession","editSession","ensureSession","fileDiff","forgetPendingInput","forkSession","hello","inspectProposal","iosSimulatorControl","itemDetail","listDir","loadOlderSession","localProjects","markSessionRead","mentionCatalog","openSession","ping","pinSession","probeSchema","projectGroups","promptShortcuts","readFile","releaseReserve","remoteSettings","renameSession","respondPermission","restoreSessions","retryPendingInput","scheduleCommand","scheduleDetail","schedules","sendTurn","sessionPreview","sessionSharing","sessionWorkspacePath","setActive","setSessionOwner","setTabClosed","snoozePresets","start","statusViewCommand","turnDiff","workspaceChanges"]
+  public static let runtimeMethods: [String] = ["agentProviderAuth","agentProviderDetail","agentProviderOperation","agentProviderProbe","agentProviders","agentRoles","androidEmulatorControl","archiveSession","checkTurnQuota","closeSession","controlTurn","conversationMarkdown","conversationShareMessages","createSession","createTab","creationOptions","decideProposal","deleteSession","editSession","ensureSession","fileDiff","forgetPendingInput","forkSession","hello","inspectProposal","iosSimulatorControl","itemDetail","listDir","loadOlderSession","localProjects","markSessionRead","mentionCatalog","openSession","ping","pinSession","probeSchema","projectGroups","promptShortcuts","readFile","releaseReserve","remoteSettings","renameSession","respondPermission","restoreSessions","retryPendingInput","scheduleCommand","scheduleDetail","schedules","sendTurn","sessionLiveStatus","sessionPreview","sessionSharing","sessionWorkspacePath","setActive","setSessionOwner","setTabClosed","snoozePresets","start","statusViewCommand","turnDiff","workspaceChanges"]
 
   public struct AgentProviderAuthParamsStart: Codable, Sendable, Equatable {
     public var workspaceId: String
@@ -7592,6 +7592,86 @@ extension RuntimeContract {
     }
   }
 
+  public struct SessionLiveStatusParams: Codable, Sendable, Equatable {
+    public var workspaceId: String
+    public var sessionId: String
+    public var machineId: String?
+    public init(workspaceId: String, sessionId: String, machineId: String? = nil) {
+      self.workspaceId = workspaceId
+      self.sessionId = sessionId
+      self.machineId = machineId
+    }
+    public init(from decoder: any Decoder) throws {
+      let c = try decoder.container(keyedBy: Key.self)
+      self.workspaceId = try c.decode(String.self, forKey: Key("workspaceId"))
+      self.sessionId = try c.decode(String.self, forKey: Key("sessionId"))
+      self.machineId = try c.decodeIfPresent(String.self, forKey: Key("machineId"))
+    }
+    public func encode(to encoder: any Encoder) throws {
+      var c = encoder.container(keyedBy: Key.self)
+      try c.encode(self.workspaceId, forKey: Key("workspaceId"))
+      try c.encode(self.sessionId, forKey: Key("sessionId"))
+      try c.encodeIfPresent(self.machineId, forKey: Key("machineId"))
+    }
+  }
+
+  public enum SessionLiveStatusResultState: String, Codable, Sendable, Equatable, CaseIterable {
+    case idle = "idle"
+    case busy = "busy"
+    case unknown = "unknown"
+  }
+
+  public enum SessionLiveStatusResultDetail: String, Codable, Sendable, Equatable, CaseIterable {
+    case running = "running"
+    case initializing = "initializing"
+    case waiting = "waiting"
+  }
+
+  public enum SessionLiveStatusResultSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case presence = "presence"
+    case pointer = "pointer"
+    case rpc = "rpc"
+    case none = "none"
+  }
+
+  public enum SessionLiveStatusResultReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case machineOffline = "machine_offline"
+    case presenceUnsynced = "presence_unsynced"
+    case rpcFailed = "rpc_failed"
+    case sessionNotFound = "session_not_found"
+  }
+
+  public struct SessionLiveStatusResult: Codable, Sendable, Equatable {
+    public var sessionId: String
+    public var state: SessionLiveStatusResultState
+    public var detail: SessionLiveStatusResultDetail?
+    public var source: SessionLiveStatusResultSource?
+    public var reason: SessionLiveStatusResultReason?
+    public init(sessionId: String, state: SessionLiveStatusResultState, detail: SessionLiveStatusResultDetail? = nil, source: SessionLiveStatusResultSource? = nil, reason: SessionLiveStatusResultReason? = nil) {
+      self.sessionId = sessionId
+      self.state = state
+      self.detail = detail
+      self.source = source
+      self.reason = reason
+    }
+    public init(from decoder: any Decoder) throws {
+      let c = try decoder.container(keyedBy: Key.self)
+      self.sessionId = try c.decode(String.self, forKey: Key("sessionId"))
+      self.state = try c.decode(SessionLiveStatusResultState.self, forKey: Key("state"))
+      self.detail = try c.decodeIfPresent(SessionLiveStatusResultDetail.self, forKey: Key("detail"))
+      self.source = try c.decodeIfPresent(SessionLiveStatusResultSource.self, forKey: Key("source"))
+      self.reason = try c.decodeIfPresent(SessionLiveStatusResultReason.self, forKey: Key("reason"))
+    }
+    public func encode(to encoder: any Encoder) throws {
+      var c = encoder.container(keyedBy: Key.self)
+      try c.encode(self.sessionId, forKey: Key("sessionId"))
+      try c.encode(self.state, forKey: Key("state"))
+      try c.encodeIfPresent(self.detail, forKey: Key("detail"))
+      try c.encodeIfPresent(self.source, forKey: Key("source"))
+      try c.encodeIfPresent(self.reason, forKey: Key("reason"))
+    }
+  }
+
   public enum SessionPreviewParamsAction: String, Codable, Sendable, Equatable, CaseIterable {
     case create = "create"
     case status = "status"
@@ -8648,293 +8728,6 @@ extension RuntimeContract {
   }
 
   public struct ShareRequestResult: Codable, Sendable, Equatable {
-    public var value: JSONValue
-    public init(value: JSONValue) {
-      self.value = value
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.value = try c.decode(JSONValue.self, forKey: Key("value"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.value, forKey: Key("value"))
-    }
-  }
-
-  public struct ShortcutCloudParamsListAccessibleDocumentsArgs: Codable, Sendable, Equatable {
-    public init() {
-    }
-    public init(from decoder: any Decoder) throws {
-      _ = try decoder.container(keyedBy: Key.self)
-    }
-    public func encode(to encoder: any Encoder) throws {
-      _ = encoder.container(keyedBy: Key.self)
-    }
-  }
-
-  public struct ShortcutCloudParamsListAccessibleDocuments: Codable, Sendable, Equatable {
-    public var workspaceId: String
-    public var args: ShortcutCloudParamsListAccessibleDocumentsArgs
-    public init(workspaceId: String, args: ShortcutCloudParamsListAccessibleDocumentsArgs) {
-      self.workspaceId = workspaceId
-      self.args = args
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.workspaceId = try c.decode(String.self, forKey: Key("workspaceId"))
-      self.args = try c.decode(ShortcutCloudParamsListAccessibleDocumentsArgs.self, forKey: Key("args"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.workspaceId, forKey: Key("workspaceId"))
-      try c.encode(self.args, forKey: Key("args"))
-    }
-  }
-
-  public enum ShortcutCloudParamsGetStreamTokenArgsTargetIndexVisibility: String, Codable, Sendable, Equatable, CaseIterable {
-    case `private` = "private"
-    case workspace = "workspace"
-  }
-
-  public struct ShortcutCloudParamsGetStreamTokenArgsTargetIndex: Codable, Sendable, Equatable {
-    public var ownerUserId: String
-    public var visibility: ShortcutCloudParamsGetStreamTokenArgsTargetIndexVisibility
-    public init(ownerUserId: String, visibility: ShortcutCloudParamsGetStreamTokenArgsTargetIndexVisibility) {
-      self.ownerUserId = ownerUserId
-      self.visibility = visibility
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.ownerUserId = try c.decode(String.self, forKey: Key("ownerUserId"))
-      self.visibility = try c.decode(ShortcutCloudParamsGetStreamTokenArgsTargetIndexVisibility.self, forKey: Key("visibility"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.ownerUserId, forKey: Key("ownerUserId"))
-      try c.encode(self.visibility, forKey: Key("visibility"))
-    }
-  }
-
-  public struct ShortcutCloudParamsGetStreamTokenArgsTargetBody: Codable, Sendable, Equatable {
-    public var bodyDocId: String
-    public init(bodyDocId: String) {
-      self.bodyDocId = bodyDocId
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.bodyDocId = try c.decode(String.self, forKey: Key("bodyDocId"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.bodyDocId, forKey: Key("bodyDocId"))
-    }
-  }
-
-  public enum ShortcutCloudParamsGetStreamTokenArgsTarget: Codable, Sendable, Equatable {
-    case index(ShortcutCloudParamsGetStreamTokenArgsTargetIndex)
-    case body(ShortcutCloudParamsGetStreamTokenArgsTargetBody)
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      let tag = try c.decode(String.self, forKey: Key("kind"))
-      switch tag {
-      case "index": self = .index(try ShortcutCloudParamsGetStreamTokenArgsTargetIndex(from: decoder))
-      case "body": self = .body(try ShortcutCloudParamsGetStreamTokenArgsTargetBody(from: decoder))
-      default: throw DecodingError.dataCorruptedError(forKey: Key("kind"), in: c, debugDescription: "Unknown kind \(tag)")
-      }
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      switch self {
-      case .index(let value):
-        try c.encode("index", forKey: Key("kind"))
-        try value.encode(to: encoder)
-      case .body(let value):
-        try c.encode("body", forKey: Key("kind"))
-        try value.encode(to: encoder)
-      }
-    }
-  }
-
-  public struct ShortcutCloudParamsGetStreamTokenArgs: Codable, Sendable, Equatable {
-    public var target: ShortcutCloudParamsGetStreamTokenArgsTarget
-    public var write: Bool
-    public init(target: ShortcutCloudParamsGetStreamTokenArgsTarget, write: Bool) {
-      self.target = target
-      self.write = write
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.target = try c.decode(ShortcutCloudParamsGetStreamTokenArgsTarget.self, forKey: Key("target"))
-      self.write = try c.decode(Bool.self, forKey: Key("write"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.target, forKey: Key("target"))
-      try c.encode(self.write, forKey: Key("write"))
-    }
-  }
-
-  public struct ShortcutCloudParamsGetStreamToken: Codable, Sendable, Equatable {
-    public var workspaceId: String
-    public var args: ShortcutCloudParamsGetStreamTokenArgs
-    public init(workspaceId: String, args: ShortcutCloudParamsGetStreamTokenArgs) {
-      self.workspaceId = workspaceId
-      self.args = args
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.workspaceId = try c.decode(String.self, forKey: Key("workspaceId"))
-      self.args = try c.decode(ShortcutCloudParamsGetStreamTokenArgs.self, forKey: Key("args"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.workspaceId, forKey: Key("workspaceId"))
-      try c.encode(self.args, forKey: Key("args"))
-    }
-  }
-
-  public enum ShortcutCloudParamsStageDocumentArgsVisibility: String, Codable, Sendable, Equatable, CaseIterable {
-    case `private` = "private"
-    case workspace = "workspace"
-  }
-
-  public struct ShortcutCloudParamsStageDocumentArgs: Codable, Sendable, Equatable {
-    public var ownerUserId: String
-    public var shortcutId: String
-    public var bodyDocId: String
-    public var visibility: ShortcutCloudParamsStageDocumentArgsVisibility
-    public init(ownerUserId: String, shortcutId: String, bodyDocId: String, visibility: ShortcutCloudParamsStageDocumentArgsVisibility) {
-      self.ownerUserId = ownerUserId
-      self.shortcutId = shortcutId
-      self.bodyDocId = bodyDocId
-      self.visibility = visibility
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.ownerUserId = try c.decode(String.self, forKey: Key("ownerUserId"))
-      self.shortcutId = try c.decode(String.self, forKey: Key("shortcutId"))
-      self.bodyDocId = try c.decode(String.self, forKey: Key("bodyDocId"))
-      self.visibility = try c.decode(ShortcutCloudParamsStageDocumentArgsVisibility.self, forKey: Key("visibility"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.ownerUserId, forKey: Key("ownerUserId"))
-      try c.encode(self.shortcutId, forKey: Key("shortcutId"))
-      try c.encode(self.bodyDocId, forKey: Key("bodyDocId"))
-      try c.encode(self.visibility, forKey: Key("visibility"))
-    }
-  }
-
-  public struct ShortcutCloudParamsStageDocument: Codable, Sendable, Equatable {
-    public var workspaceId: String
-    public var args: ShortcutCloudParamsStageDocumentArgs
-    public init(workspaceId: String, args: ShortcutCloudParamsStageDocumentArgs) {
-      self.workspaceId = workspaceId
-      self.args = args
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.workspaceId = try c.decode(String.self, forKey: Key("workspaceId"))
-      self.args = try c.decode(ShortcutCloudParamsStageDocumentArgs.self, forKey: Key("args"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.workspaceId, forKey: Key("workspaceId"))
-      try c.encode(self.args, forKey: Key("args"))
-    }
-  }
-
-  public struct ShortcutCloudParamsActivateDocumentArgs: Codable, Sendable, Equatable {
-    public var bodyDocId: String
-    public var previousBodyDocId: String?
-    public var previousRevision: String?
-    public var revision: String
-    public var slug: String
-    public var indexBytes: Int
-    public init(bodyDocId: String, previousBodyDocId: String?, previousRevision: String?, revision: String, slug: String, indexBytes: Int) {
-      self.bodyDocId = bodyDocId
-      self.previousBodyDocId = previousBodyDocId
-      self.previousRevision = previousRevision
-      self.revision = revision
-      self.slug = slug
-      self.indexBytes = indexBytes
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.bodyDocId = try c.decode(String.self, forKey: Key("bodyDocId"))
-      self.previousBodyDocId = try c.decode(String?.self, forKey: Key("previousBodyDocId"))
-      self.previousRevision = try c.decode(String?.self, forKey: Key("previousRevision"))
-      self.revision = try c.decode(String.self, forKey: Key("revision"))
-      self.slug = try c.decode(String.self, forKey: Key("slug"))
-      self.indexBytes = try c.decode(Int.self, forKey: Key("indexBytes"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.bodyDocId, forKey: Key("bodyDocId"))
-      try c.encode(self.previousBodyDocId, forKey: Key("previousBodyDocId"))
-      try c.encode(self.previousRevision, forKey: Key("previousRevision"))
-      try c.encode(self.revision, forKey: Key("revision"))
-      try c.encode(self.slug, forKey: Key("slug"))
-      try c.encode(self.indexBytes, forKey: Key("indexBytes"))
-    }
-  }
-
-  public struct ShortcutCloudParamsActivateDocument: Codable, Sendable, Equatable {
-    public var workspaceId: String
-    public var args: ShortcutCloudParamsActivateDocumentArgs
-    public init(workspaceId: String, args: ShortcutCloudParamsActivateDocumentArgs) {
-      self.workspaceId = workspaceId
-      self.args = args
-    }
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      self.workspaceId = try c.decode(String.self, forKey: Key("workspaceId"))
-      self.args = try c.decode(ShortcutCloudParamsActivateDocumentArgs.self, forKey: Key("args"))
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      try c.encode(self.workspaceId, forKey: Key("workspaceId"))
-      try c.encode(self.args, forKey: Key("args"))
-    }
-  }
-
-  public enum ShortcutCloudParams: Codable, Sendable, Equatable {
-    case listAccessibleDocuments(ShortcutCloudParamsListAccessibleDocuments)
-    case getStreamToken(ShortcutCloudParamsGetStreamToken)
-    case stageDocument(ShortcutCloudParamsStageDocument)
-    case activateDocument(ShortcutCloudParamsActivateDocument)
-    public init(from decoder: any Decoder) throws {
-      let c = try decoder.container(keyedBy: Key.self)
-      let tag = try c.decode(String.self, forKey: Key("operation"))
-      switch tag {
-      case "listAccessibleDocuments": self = .listAccessibleDocuments(try ShortcutCloudParamsListAccessibleDocuments(from: decoder))
-      case "getStreamToken": self = .getStreamToken(try ShortcutCloudParamsGetStreamToken(from: decoder))
-      case "stageDocument": self = .stageDocument(try ShortcutCloudParamsStageDocument(from: decoder))
-      case "activateDocument": self = .activateDocument(try ShortcutCloudParamsActivateDocument(from: decoder))
-      default: throw DecodingError.dataCorruptedError(forKey: Key("operation"), in: c, debugDescription: "Unknown operation \(tag)")
-      }
-    }
-    public func encode(to encoder: any Encoder) throws {
-      var c = encoder.container(keyedBy: Key.self)
-      switch self {
-      case .listAccessibleDocuments(let value):
-        try c.encode("listAccessibleDocuments", forKey: Key("operation"))
-        try value.encode(to: encoder)
-      case .getStreamToken(let value):
-        try c.encode("getStreamToken", forKey: Key("operation"))
-        try value.encode(to: encoder)
-      case .stageDocument(let value):
-        try c.encode("stageDocument", forKey: Key("operation"))
-        try value.encode(to: encoder)
-      case .activateDocument(let value):
-        try c.encode("activateDocument", forKey: Key("operation"))
-        try value.encode(to: encoder)
-      }
-    }
-  }
-
-  public struct ShortcutCloudResult: Codable, Sendable, Equatable {
     public var value: JSONValue
     public init(value: JSONValue) {
       self.value = value
@@ -10148,6 +9941,16 @@ extension RuntimeContract {
         return nil
       }
     }
+    public enum SessionLiveStatus: RuntimeCall {
+      public typealias Params = RuntimeContract.SessionLiveStatusParams
+      public typealias Result = RuntimeContract.SessionLiveStatusResult
+      public static let method = "sessionLiveStatus"
+      public static let timeout: Double = 15
+      public static func result(_ value: RuntimeContract.CallResult) -> Result? {
+        if case .sessionLiveStatus(let result) = value { return result }
+        return nil
+      }
+    }
     public enum SessionPreview: RuntimeCall {
       public typealias Params = RuntimeContract.SessionPreviewParams
       public typealias Result = RuntimeContract.SessionPreviewResult
@@ -10279,12 +10082,6 @@ extension RuntimeContract {
       public static let method = "shareRequest"
       public static let timeout: Double = 65
     }
-    public enum ShortcutCloud: RuntimeHostCall {
-      public typealias Params = RuntimeContract.ShortcutCloudParams
-      public typealias Result = RuntimeContract.ShortcutCloudResult
-      public static let method = "shortcutCloud"
-      public static let timeout: Double = 20
-    }
   }
 
   public enum CallResult: Sendable, Equatable {
@@ -10337,6 +10134,7 @@ extension RuntimeContract {
     case scheduleDetail(RuntimeContract.ScheduleDetail)
     case schedules(RuntimeContract.SchedulesResult)
     case sendTurn(RuntimeContract.SendTurnResult)
+    case sessionLiveStatus(RuntimeContract.SessionLiveStatusResult)
     case sessionPreview(RuntimeContract.SessionPreviewResult)
     case sessionSharing(RuntimeContract.SessionSharingResult)
     case sessionWorkspacePath(RuntimeContract.SessionWorkspacePathResult)
@@ -10354,13 +10152,11 @@ extension RuntimeContract {
     case githubMentions(RuntimeContract.GitHubMentionsParams)
     case grant(RuntimeContract.Empty)
     case shareRequest(RuntimeContract.ShareRequestParams)
-    case shortcutCloud(RuntimeContract.ShortcutCloudParams)
     public var method: String {
       switch self {
       case .githubMentions: "githubMentions"
       case .grant: "grant"
       case .shareRequest: "shareRequest"
-      case .shortcutCloud: "shortcutCloud"
       }
     }
   }
@@ -10409,7 +10205,6 @@ extension RuntimeContract {
         case "githubMentions": message = .request(id: id, .githubMentions(try c.decode(RuntimeContract.GitHubMentionsParams.self, forKey: Key("payload"))))
         case "grant": message = .request(id: id, .grant(try c.decode(RuntimeContract.Empty.self, forKey: Key("payload"))))
         case "shareRequest": message = .request(id: id, .shareRequest(try c.decode(RuntimeContract.ShareRequestParams.self, forKey: Key("payload"))))
-        case "shortcutCloud": message = .request(id: id, .shortcutCloud(try c.decode(RuntimeContract.ShortcutCloudParams.self, forKey: Key("payload"))))
         default: message = .unsupported(kind: kind, method: method, id: id)
         }
       case ("result", let id?):
@@ -10463,6 +10258,7 @@ extension RuntimeContract {
         case "scheduleDetail": message = .result(id: id, .scheduleDetail(try c.decode(RuntimeContract.ScheduleDetail.self, forKey: Key("payload"))))
         case "schedules": message = .result(id: id, .schedules(try c.decode(RuntimeContract.SchedulesResult.self, forKey: Key("payload"))))
         case "sendTurn": message = .result(id: id, .sendTurn(try c.decode(RuntimeContract.SendTurnResult.self, forKey: Key("payload"))))
+        case "sessionLiveStatus": message = .result(id: id, .sessionLiveStatus(try c.decode(RuntimeContract.SessionLiveStatusResult.self, forKey: Key("payload"))))
         case "sessionPreview": message = .result(id: id, .sessionPreview(try c.decode(RuntimeContract.SessionPreviewResult.self, forKey: Key("payload"))))
         case "sessionSharing": message = .result(id: id, .sessionSharing(try c.decode(RuntimeContract.SessionSharingResult.self, forKey: Key("payload"))))
         case "sessionWorkspacePath": message = .result(id: id, .sessionWorkspacePath(try c.decode(RuntimeContract.SessionWorkspacePathResult.self, forKey: Key("payload"))))

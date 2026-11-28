@@ -49,6 +49,7 @@ final class SchedulesController: UIViewController, UICollectionViewDelegate {
   private var clock: Timer?
   /// A schedule to open in its editor once the first live list names it (a proposal card's Open).
   var opening: String?
+  private weak var activeNewSchedulePage: LodyPageController?
 
   init(source: SessionSource = .live, service: ScheduleService = .live) {
     self.source = source
@@ -423,11 +424,24 @@ final class SchedulesController: UIViewController, UICollectionViewDelegate {
   /// list, or in a sheet over it when Schedules fills the regular-width detail column.
   func newSchedule() {
     let state = source.state
-    guard state.workspace != nil, !state.workspaceId.isEmpty else {
+    guard let workspace = state.workspace, !state.userId.isEmpty else {
       LodyToastOverlay.shared.show(message: String(localized: "tabs.toast.signInFirst", bundle: .lody), kind: .neutral)
       return
     }
-    open(nil)
+    switch workspace.resolvedMode {
+    case .plaintext:
+      if let existing = activeNewSchedulePage, !existing.closed,
+         !existing.isBeingDismissed, existing.navigationController?.isBeingDismissed != true,
+         !existing.isMovingFromParent {
+        return
+      }
+      open(nil)
+    case .e2ee:
+      LodyToastOverlay.shared.show(message: String(localized: "workspace.e2ee.unsupported", bundle: .lody), kind: .error)
+    case .unknown:
+      if source === SessionSource.live { Task { await AuthSession.shared.refreshWorkspaceModes() } }
+      LodyToastOverlay.shared.show(message: String(localized: "workspace.mode.unknown", bundle: .lody), kind: .neutral)
+    }
   }
 
   private func open(_ item: ScheduleItem?) {
@@ -445,7 +459,8 @@ final class SchedulesController: UIViewController, UICollectionViewDelegate {
     let title = item?.title ?? ScheduleFormat.text("new")
     guard inDetailColumn else {
       editor.openChat = { [weak self] item in self?.openChat(item) }
-      LodyShell.shared.pushNative(editor, title: title, from: self)
+      let page = LodyShell.shared.pushNative(editor, title: title, from: self)
+      if item == nil { activeNewSchedulePage = page }
       return
     }
     // The chat replaces Schedules in the detail column, so the sheet closes first.
@@ -454,7 +469,8 @@ final class SchedulesController: UIViewController, UICollectionViewDelegate {
       self?.openChat(item)
     }
     let height = min(860, (view.window?.bounds.height ?? 900) - 80)
-    LodyShell.shared.presentNative(editor, title: title, size: CGSize(width: 720, height: height))
+    let page = LodyShell.shared.presentNative(editor, title: title, size: CGSize(width: 720, height: height))
+    if item == nil { activeNewSchedulePage = page }
   }
 
   /// Owner-only commands; resume and run also need a computer whose CLI runs schedules.
@@ -500,8 +516,12 @@ final class SchedulesController: UIViewController, UICollectionViewDelegate {
     return symbols[action] ?? "circle"
   }
 
-  /// Delete always confirms; everything else runs at once.
+  /// Delete always confirms; manual run checks any bound chat first; pause/resume run at once.
   private func request(_ action: ScheduleAction, _ item: ScheduleItem) {
+    if action == .run {
+      requestRun(item)
+      return
+    }
     guard action == .delete else { return perform(action, item) }
     let alert = UIAlertController(
       title: String(format: ScheduleFormat.text("deleteTitle"), item.title),
@@ -512,6 +532,34 @@ final class SchedulesController: UIViewController, UICollectionViewDelegate {
       self?.perform(.delete, item)
     })
     present(alert, animated: true)
+  }
+
+  private func requestRun(_ item: ScheduleItem) {
+    guard ScheduleRunPrecheck.boundSessionId(for: item) != nil else {
+      perform(.run, item)
+      return
+    }
+    let workspaceId = source.state.workspaceId
+    guard !workspaceId.isEmpty, actions(item).contains(.run), cache.pending.insert(item.scheduleId).inserted else { return }
+    let owner = cache
+    let catalog = source.state.catalog
+    Task { [weak self, service] in
+      let decision = await ScheduleRunPrecheck.evaluate(
+        item: item, workspaceId: workspaceId, catalog: catalog, service: service
+      )
+      guard let self, self.cache === owner, owner.valid, self.source.state.workspaceId == workspaceId else { return }
+      self.cache.pending.remove(item.scheduleId)
+      switch decision {
+      case .runImmediately:
+        self.perform(.run, item)
+      case .confirmBusy, .confirmUnknown:
+        guard self.presentedViewController == nil,
+              let alert = ScheduleRunPrecheck.confirmationAlert(item: item, decision: decision, detail: false, onConfirm: { [weak self] in
+                self?.perform(.run, item)
+              }) else { return }
+        self.present(alert, animated: true)
+      }
+    }
   }
 
   private func perform(_ action: ScheduleAction, _ item: ScheduleItem) {
