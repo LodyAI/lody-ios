@@ -16,20 +16,37 @@ def failure_alert():
     return ui.wait(visible, 'Failure alert is missing its OK button')
 
 
-def pending_actions(calls):
+def pending_action(key):
     ui.axe('tap', '--id', 'stale-pending:delivery')
-    ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('send.recover.action') for i in items), 'Pending-input actions missing')
+    label = catalog.text(key)
+    return ui.wait(lambda items: next((i for i in items if i.get('type') == 'Button' and i.get('AXLabel') == label), None),
+                   'Pending-input action missing: ' + label)
+
+
+def pending_actions(calls):
+    remove = pending_action('send.forget.action')
     ui.capture('pending-input-actions')
-    ui.axe('tap', '--label', catalog.text('send.recover.action'))
-    ui.wait(lambda items: any(i.get('AXLabel') == f'Calls: {calls} · uploaded' for i in items), 'Recovery must confirm delivery without a new send')
+    ui.tap_frame(remove['frame'])
+    ui.wait(lambda items: any(i.get('AXLabel') == f'Calls: {calls} · idle' for i in items), 'Local removal did not clear the unknown input')
+    ui.capture('pending-input-removed')
+
+    ui.axe('tap', '--id', 'send-toggle-pending')
+    ui.wait(lambda items: any(i.get('AXLabel') == f'Calls: {calls} · unknown' for i in items), 'Unknown input did not reset')
+    recover = pending_action('send.recover.action')
+    ui.tap_frame(recover['frame'])
+    ui.wait(lambda items: any(i.get('AXLabel') == f'Calls: {calls} · accepted' for i in items), 'Recovery must confirm delivery without a new send')
     ui.element('stale-pending:user')
     assert not any(i.get('AXUniqueId') == 'stale-pending:duration' for i in ui.state()), 'A delivery ACK must not infer working time'
+    if not ui.element('session-input').get('AXValue'):
+        ui.axe('tap', '--id', 'session-input')
+        ui.type_into('session-input', 'draft for the next turn')
+    ui.wait(lambda items: any(i.get('AXUniqueId') == 'session-send' and i.get('enabled') for i in items),
+            'A confirmed handoff must unlock the composer')
     ui.capture('delivery-confirmed-only')
-    ui.axe('tap', '--id', 'stale-pending:delivery')
-    ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('send.forget.action') for i in items), 'Confirmed delivery must retain local removal')
-    ui.axe('tap', '--label', catalog.text('send.forget.action'))
-    ui.wait(lambda items: any(i.get('AXLabel') == f'Calls: {calls} · idle' for i in items), 'Local removal did not clear the pending input')
-    ui.capture('pending-input-removed')
+
+    # Reset the fixture without creating a history entry for the later causal-reply check.
+    ui.axe('tap', '--id', 'send-toggle-pending')
+    ui.wait(lambda items: any(i.get('AXLabel') == f'Calls: {calls} · idle' for i in items), 'Confirmed fixture input did not reset')
 
 if os.environ.get('LODY_UI_PENDING_ONLY') == '1':
     ui.axe('tap', '--id', 'send-toggle-pending')
@@ -45,7 +62,7 @@ assert progress['x'] + progress['width'] <= viewport['x'] + viewport['width'], '
 ui.axe('tap', '--id', 'session-input')
 ui.wait(lambda items: next((i for i in items if i.get('AXUniqueId') == 'inputView' and i['frame']['height'] > 200), None),
         'The software keyboard must be ready before typing')
-ui.type_into('session-input', 'Offline send\nKeep my attachment')
+ui.type_into('session-input', 'Offline send with enough text to wrap across multiple lines and keep my attachment')
 draft = ui.element('session-input')['AXValue']
 ui.capture('draft')
 ui.axe('tap', '--id', 'session-send', '--post-delay', '1')

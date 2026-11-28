@@ -1342,6 +1342,11 @@ final class ChatComposerView: UIView, UITextViewDelegate {
   private var failedDraft: ChatPendingSend?
 
   func setPendingSend(_ pending: ChatPendingSend) {
+    if pending.phase == "accepted", pending.rpcAccepted == false {
+      // A durable handoff can arrive after the clear token has already been applied.
+      clearPendingSend(id: pending.id)
+      return
+    }
     guard pending.id != restoredSendID, pending.id != acknowledgedSendID else { return }
     if pending.failed == true {
       pendingDraft = nil
