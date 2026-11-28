@@ -78,6 +78,13 @@ func settle() async {
   }
 }
 
+@MainActor func waitUntil(_ condition: () -> Bool) async throws {
+  let deadline = ContinuousClock.now + .seconds(5)
+  while !condition() && ContinuousClock.now < deadline {
+    try await Task.sleep(for: .milliseconds(10))
+  }
+}
+
 func session(_ id: String, status: String = "idle") -> [String: OutboxValue] {
   ["id": .string(id), "machineId": .string("m1"), "cliType": .string("builtin"), "agentType": .string("codex"),
    "archived": .bool(false), "status": .string(status)]
@@ -397,10 +404,11 @@ func record(_ id: String, phase: String = "waiting", sendId: String? = nil, extr
     let nine = (0...OutboxDispatcher.maxSessionReserves).map { record("s\($0)", sendId: "0000000\($0)") }
     precondition(OutboxDispatcher.maxSessionReserves == 8)
     (dispatcher, store, _) = await harness(nine, network)
+    try await waitUntil { network.ensured.count >= OutboxDispatcher.maxSessionReserves }
     precondition(network.ensured.count == 8 && !network.ensured.contains("s8"))
     precondition(store.snapshot.records.first { $0.sessionId == "s8" }?.phase == "waiting")
     blocked.open()
-    await settle()
+    try await waitUntil { phases(store).allSatisfy { $0 == "accepted" } }
     precondition(network.ensured.contains("s8") && phases(store).allSatisfy { $0 == "accepted" })
     print("PASS: the ninth background waiting send is not ensured until a reserve frees")
 

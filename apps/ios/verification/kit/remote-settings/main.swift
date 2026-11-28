@@ -175,8 +175,9 @@ var mixedUsage = AgentUsage(configs: [
   AgentQuota(id: "codex", provider: "codex", agentConfigId: "codex-two", windows: [UsageWindow(usedPercent: 70)]),
 ])
 @MainActor func verifyMixedUsage() {
-  let sections = AgentProviderSections.make(mixedSnapshot, selectedID: "m1", busy: true, usage: ["m1": mixedUsage])
-  let windows = AgentProviderSections.usageWindows(mixedSnapshot, machine: mixedSnapshot.machines[0], usage: mixedUsage, now: now)
+  let usage = ["m1": mixedUsage]
+  let sections = AgentProviderSections.make(mixedSnapshot, selectedID: "m1", busy: true, usage: usage)
+  let windows = AgentProviderSections.usageWindows(mixedSnapshot, machine: mixedSnapshot.machines[0], usage: usage, now: now)
   precondition(windows.count == 2 && Set(windows.values.flatMap { $0 }.map(\.id)).count == 2)
   precondition(windows["codex-one"]?.map(\.fraction) == [0.4] && windows["codex-two"]?.map(\.fraction) == [0.7],
                "Each configured account keeps its own quota")

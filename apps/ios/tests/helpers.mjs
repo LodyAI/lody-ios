@@ -205,9 +205,15 @@ export async function openTestSession({
     }
     async readOnce(options = {}) {
       const { signal } = options;
-      if (this.url.includes(':rpc:res:') && onRpc) {
+      if (this.url.includes(':rpc:res:')) {
         const request = replies.get(this.url.split('/ds/lody/')[1]);
-        const result = await onRpc(request, runtime, signal);
+        if (!request) throw new Error('RPC reply stream has no request');
+        if (!onRpc && request.method !== 'session/dispatch-turn')
+          throw new Error(`Unexpected fixture RPC: ${request.method}`);
+        // Routine dispatch gets an ACK. Tests for other machine behavior supply onRpc.
+        const result = onRpc
+          ? await onRpc(request, runtime, signal)
+          : { result: { accepted: true } };
         return ok({
           nextOffset: '1',
           upToDate: true,

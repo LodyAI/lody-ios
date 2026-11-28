@@ -7,7 +7,6 @@ from driver import UI
 import catalog
 
 ui = UI(sys.argv[1], sys.argv[2])
-more = catalog.text('common.more')
 
 
 def spoken(item):
@@ -42,6 +41,27 @@ def tap_label(label, post_delay='.6'):
     ui.tap_frame(item['frame'], post_delay=post_delay)
 
 
+def tap_more():
+    find_title = catalog.text('session.action.find')
+
+    def menu_is_open(items):
+        return any(item.get('type') == 'Button' and item.get('AXLabel') == find_title for item in items)
+
+    # Copy feedback can briefly cover the button. Retry only while the menu is still closed.
+    for attempt in range(2):
+        items = ui.state()
+        if menu_is_open(items):
+            return
+        more = next((item for item in items if item.get('AXUniqueId') == 'chat-more'), None) or ui.element('chat-more')
+        ui.tap_frame(more['frame'], post_delay='.6')
+        try:
+            ui.wait(menu_is_open, 'More menu did not open', timeout=6)
+            return
+        except AssertionError:
+            if attempt == 1:
+                raise
+
+
 def tap_back():
     back = next(item for item in reversed(ui.state()) if item.get('AXUniqueId') == 'BackButton')
     ui.tap_frame(back['frame'], post_delay='.6')
@@ -53,8 +73,21 @@ def tap_menu_item(title):
     ui.tap_frame(item['frame'], post_delay='.6')
 
 
+def check_reconnect():
+    wait_probe('offline', 'Offline scenario did not start')
+    status = ui.element('chat-overlay-status')
+    assert status.get('AXLabel') == catalog.text('native.chat.connection.paused'), 'The reconnect button should show only the connection status'
+    ui.capture('offline')
+    ui.tap_frame(status['frame'], post_delay='.5')
+    wait_probe('reconnect', 'Reconnect did not reach the session feed')
+    wait_text('Live reply with a needle')
+    ui.wait(lambda items: not any(i.get('AXUniqueId') == 'chat-overlay-status' for i in items),
+            'Pending history sync should not show a floating status on a connected conversation')
+    ui.capture('reconnected')
+
+
 def check_archive():
-    tap_label(more)
+    tap_more()
     tap_label(catalog.text('session.action.archive'))
     ui.wait(lambda items: not any(i.get('AXUniqueId') == 'session-preview-probe' for i in items),
             'Archived session page did not return', timeout=10)
@@ -63,17 +96,16 @@ def check_archive():
 
     ui.open_case('session-preview-archive-error')
     wait_probe('live', 'Archive failure scenario did not start')
-    tap_label(more)
+    tap_more()
     tap_label(catalog.text('session.action.archive'), post_delay='0')
-    ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('session.toast.archiveFailed') for i in items),
-            'Missing archive failure')
+    # The session-info-bar native check verifies the scoped failure callback after the pop.
     ui.wait(lambda items: not any(i.get('AXUniqueId') == 'session-preview-probe' for i in items),
             'Failed archive did not return immediately')
     ui.capture('archive-failure-return')
 
     ui.open_case('session-preview-archived')
     wait_probe('live', 'Archived scenario did not start')
-    tap_label(more)
+    tap_more()
     ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('session.action.unarchive') for i in items), 'Archive state did not refresh the menu')
     ui.capture('archived-menu')
     tap_label(catalog.text('session.action.unarchive'))
@@ -85,6 +117,11 @@ def check_archive():
 if os.environ.get("LODY_VERIFY_SESSION_ARCHIVE_ONLY") == "1":
     wait_probe("live", "Archive scenario did not start")
     check_archive()
+    sys.exit(0)
+
+if os.environ.get('LODY_VERIFY_SESSION_RECONNECT_ONLY') == '1':
+    check_reconnect()
+    print('PASS: reconnect works and pending history sync does not show a floating status.')
     sys.exit(0)
 
 
@@ -202,15 +239,18 @@ for option, expected in [
     ('session.copy.url', 'https://lody.ai/preview/sessions/native-session'),
     ('session.copy.deeplink', 'lody://session/native-session?workspace=preview-workspace'),
 ]:
-    tap_label(more)
+    tap_more()
     tap_label(copy_menu)
     if option == 'session.copy.baseBranch':
         ui.capture('copy-submenu')
     tap_menu_item(catalog.text(option))
     wait_clipboard(expected)
+    # The clipboard can update before UIKit finishes dismissing the menu.
+    ui.wait(lambda items: not any(i.get('AXLabel') == copy_menu for i in items),
+            'The Copy menu did not close after copying ' + catalog.text(option))
 
 # Rename and Change owner write through the session service.
-tap_label(more)
+tap_more()
 tap_label(catalog.text('session.action.rename'))
 title_field = ui.wait(lambda items: next((i for i in items if i.get('type') == 'TextField'), None),
                       'Rename prompt has no title field')
@@ -225,14 +265,15 @@ wait_probe('rename', 'Rename did not reach the session service')
 ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-navigation-title' and renamed.casefold() in spoken(i).casefold()
                           for i in items), 'The conversation header did not show the new title')
 
-tap_label(more)
+tap_more()
 tap_label(catalog.text('session.owner.change'))
 ui.capture('owner-submenu')
 tap_menu_item('Ada Lovelace')
-wait_probe('owner:preview-teammate', 'Change owner did not reach the session service')
-wait_text(catalog.text('session.owner.changed', name='Ada Lovelace'))
+ui.wait(lambda items: 'owner:preview-teammate' in probe(items).split(',')
+        and not any(i.get('AXLabel') == 'Ada Lovelace' for i in items),
+        'Change owner did not update the session and close the menu')
 
-tap_label(more)
+tap_more()
 tap_label(catalog.text('session.action.find'))
 ui.element('chat-find-field')
 ui.axe('type', 'needle')
@@ -240,7 +281,7 @@ ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-find-count' and (i.get('A
 ui.capture('find')
 ui.axe('tap', '--id', 'chat-find-close', '--post-delay', '.5')
 
-tap_label(more)
+tap_more()
 tap_label(catalog.text('session.action.delete'))
 ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('session.delete.title') for i in items), 'Missing deletion confirmation')
 buttons = [i for i in ui.state() if i.get('type') == 'Button' and i.get('AXLabel') == catalog.text('session.action.delete')]
@@ -249,12 +290,7 @@ ui.axe('tap', '-x', str(frame['x'] + frame['width'] / 2), '-y', str(frame['y'] +
 ui.wait(lambda items: not any(i.get('AXUniqueId') == 'session-preview-probe' for i in items), 'Deleted session page did not return', timeout=10)
 
 ui.open_case('session-preview-offline')
-wait_probe('offline', 'Offline scenario did not start')
-ui.element('chat-overlay-status')
-ui.capture('offline')
-ui.axe('tap', '--id', 'chat-overlay-status', '--post-delay', '.5')
-wait_probe('reconnect', 'Reconnect did not reach the session feed')
-wait_text('Live reply with a needle')
+check_reconnect()
 
 ui.open_case('session-preview-find')
 ui.wait(lambda items: any(i.get('AXUniqueId') == 'chat-find-field' and 'needle' in (i.get('AXValue') or '') for i in items), 'Find query did not open the find bar')

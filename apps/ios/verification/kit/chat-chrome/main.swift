@@ -58,30 +58,6 @@ host.layoutIfNeeded()
 precondition(ChatOverlay.slot(connection: "connecting") == .connecting)
 precondition(ChatOverlay.slot(connection: "paused") == .paused)
 precondition(ChatOverlay.slot(connection: "") == .idle)
-precondition(RoostHistorySync(source: .machine, phase: .idle).label(bundle: .lody) == nil)
-precondition(RoostHistorySync(source: .streams, phase: .ready).label(bundle: .lody) == nil)
-precondition(RoostHistorySync(source: .machine, phase: .ready, newerVersionPending: true).label(bundle: .lody) == nil)
-precondition(ChatOverlay.slot(connection: "", historySyncLabel: RoostHistorySync(source: .streams, phase: .ready).label(bundle: .lody)) == .idle)
-let pendingLabel = RoostHistorySync(source: .streams, phase: .pending).label(bundle: .lody)
-precondition(pendingLabel == String(localized: "native.chat.historySync.pending", bundle: .lody))
-precondition(pendingLabel?.contains("Streams") == false)
-precondition(
-  ChatOverlay.slot(connection: "connecting", historySyncLabel: pendingLabel)
-    == .history(
-      label: String(localized: "native.chat.historySync.pending", bundle: .lody) + "\n"
-        + String(localized: "native.chat.connection.connecting", bundle: .lody),
-      reconnect: false
-    )
-)
-precondition(
-  RoostHistorySync(source: .streams, phase: .ready, newerVersionPending: true).label(bundle: .lody)
-    == String(localized: "native.chat.historySync.previous", bundle: .lody)
-)
-precondition(
-  RoostHistorySync(source: .streams, phase: .retrying, httpStatus: 503, newerVersionPending: true).label(bundle: .lody)
-    == String(format: String(localized: "native.chat.historySync.retryingHttp", bundle: .lody), 503) + "\n"
-      + String(localized: "native.chat.historySync.previous", bundle: .lody)
-)
 
 show(.connecting, scroll: false)
 precondition(!overlay.isHidden, "Connecting overlay must be visible")

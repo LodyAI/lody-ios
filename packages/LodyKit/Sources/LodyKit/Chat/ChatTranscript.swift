@@ -73,7 +73,7 @@ extension ChatEntry {
       result.items = entry.items.flatMap { item -> [ChatItem] in
         guard let markdown = item.carriedPlan else { return [item] }
         var plan = item
-        plan.itemId = ChatItem.carriedPlanID(item.itemId)
+        plan.itemId = ChatCarriedPlan.itemID(item.itemId)
         plan.type = "proposed_plan"
         plan.markdown = markdown
         plan.status = "completed"
@@ -88,8 +88,6 @@ extension ChatEntry {
 }
 
 extension ChatItem {
-  static func carriedPlanID(_ itemId: String) -> String { itemId + ":plan" }
-
   var carriedPlan: String? {
     guard type == "tool_call", kind == "switch_mode",
           let plan = plan?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty else { return nil }

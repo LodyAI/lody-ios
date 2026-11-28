@@ -675,10 +675,18 @@ let retiredSend = descendants(retiredComposer).compactMap { $0 as? UIButton }.fi
 retiredComposer.setPendingSend(transferred)
 retiredComposer.clearPendingSend(id: "another-send")
 precondition(!retiredSend.isEnabled, "A different send must not release the pending composer")
+var durableHandoff = acknowledged
+durableHandoff.phase = "accepted"
+durableHandoff.rpcAccepted = false
+retiredComposer.setPendingSend(durableHandoff)
+precondition(!retiredSend.isEnabled, "A late confirmation must not release a different send")
 retiredComposer.clearPendingSend(id: transferred.id)
 retiredInput.text = "已完成后继续发送"
 retiredComposer.textViewDidChange(retiredInput)
 precondition(retiredSend.isEnabled, "Retiring the published send must release the composer without a token transition")
+retiredComposer.setPendingSend(durableHandoff)
+precondition(retiredSend.isEnabled && retiredInput.text == "已完成后继续发送",
+  "A delivered handoff without an RPC acknowledgement must not acquire the draft lock")
 
 let typingComposer = ChatComposerView(frame: CGRect(x: 0, y: 0, width: 390, height: 64))
 typingComposer.setComposerState(ready)

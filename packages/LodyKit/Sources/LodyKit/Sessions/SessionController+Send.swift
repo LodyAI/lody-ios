@@ -321,7 +321,6 @@ extension SessionController {
       "connection": draft ? "" : connection(feed),
       "placeholder": placeholder(session, locked: locked),
     ]
-    if let label = feed.historySync?.label(bundle: .lody) { composer["historySyncLabel"] = label }
     let busy = control.running || sender?.awaitingReply == true || sender?.sending == true || OutboxDispatcher.busy.contains(session.status)
     composer["actionBar"] = draft ? [:] : actionBarState(session, busy: busy)
     composer["usage"] = sessionUsage(session, feed: feed)

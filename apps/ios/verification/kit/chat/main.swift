@@ -20,19 +20,21 @@ assert(transcript.rows(processEntryID: "other").isEmpty)
 let finished = json.replacingOccurrences(of: "\"finished\":false", with: "\"finished\":true")
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(finished.utf8))
 assert(!streaming.contains { $0.kind == "meta" }, "A live reply must not offer completed-message actions")
-assert(transcript.rows().filter { $0.kind != "meta" }.map(\.id) == streaming.map(\.id), "Completion preserves existing main-list rows")
+let completedRows = transcript.rows()
+assert(completedRows.map(\.kind) == ["summary", "text", "meta"], "Completion folds thought and tool work into one row")
+assert(completedRows.first { $0.kind == "text" }?.id == streaming.first { $0.kind == "text" }?.id,
+  "Completion preserves the answer's row identity")
 assert(transcript.rows().contains { $0.kind == "meta" && $0.text.isEmpty }, "Old replies retain actions without inventing metadata")
 assert(transcript.rows(processEntryID: "reply").map(\.id) == process.map(\.id), "The process sheet stays flat after completion")
 let failure = finished.replacingOccurrences(of: "\"status\":\"completed\"", with: "\"status\":\"failed\"")
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(failure.utf8))
-assert(transcript.rows().contains { $0.kind == "summary" && $0.attention })
-assert(transcript.rows(processEntryID: "reply").contains { $0.itemID == "tool" && $0.attention })
+assert(transcript.rows().contains { $0.kind == "summary" && !$0.attention })
+assert(transcript.rows(processEntryID: "reply").contains { $0.itemID == "tool" && !$0.attention })
 let failedSummary = transcript.rows().first { $0.kind == "summary" }!
 assert(!failedSummary.text.contains("native.chat.transcript.status.failed"), failedSummary.text)
 assert(failedSummary.text.contains("native.chat.transcript.activity.thought"), failedSummary.text)
 assert(failedSummary.text.contains("native.chat.transcript.activity.tools"), failedSummary.text)
-assert(failedSummary.symbol == "exclamationmark.triangle.fill",
-  "A failed tool in the process must replace the status pip with a warning mark")
+assert(failedSummary.symbol.isEmpty, "A failed tool leaves the process mark neutral")
 assert(!failedSummary.shines, "A finished process must not shine")
 
 let liveFailedJSON = """
@@ -41,24 +43,23 @@ let liveFailedJSON = """
 {"itemId":"tool","type":"tool_call","title":"读取文件","status":"failed"}]}]
 """
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(liveFailedJSON.utf8))
-let liveFailed = transcript.rows().first { $0.kind == "summary" }!
+let liveFailed = transcript.rows().first { $0.processStartID == "tool" }!
 assert(!liveFailed.attention, "A failed command needs no special treatment")
 assert(liveFailed.running)
 assert(liveFailed.shines, "A live process with a failed tool must keep the shine")
-assert(liveFailed.symbol.isEmpty,
-  "A live process with a failed tool must show a warning mark instead of the pip")
+assert(liveFailed.symbol.isEmpty)
 let permission = finished.replacingOccurrences(of: "\"status\":\"completed\"", with: "\"permission\":{\"requestId\":\"p\",\"pending\":true}")
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(permission.utf8))
 assert(transcript.rows().contains { $0.kind == "summary" && $0.attention })
 assert(transcript.rows(processEntryID: "reply").contains { $0.itemID == "tool" && $0.actionable && $0.attention })
-print("Chat: stable main rows, flat process sheet, errors and permissions passed")
+print("Chat: stable answer row, flat process sheet, neutral tool failures and permissions passed")
 
 let trailingTool = finished.replacingOccurrences(of: "\"text\":\"最终答案\"}", with: "\"text\":\"最终答案\"},{\"itemId\":\"tail\",\"type\":\"tool_call\"}")
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(trailingTool.utf8))
 assert(transcript.rows().contains { $0.itemID == "answer" }, "A trailing status must not hide the answer")
 assert(!transcript.rows().contains { $0.itemID == "tail" })
 
-let proseBeforeTool = trailingTool.replacingOccurrences(of: "\"type\":\"thought\"", with: "\"type\":\"text\"")
+let proseBeforeTool = finished.replacingOccurrences(of: "\"type\":\"thought\"", with: "\"type\":\"text\"")
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(proseBeforeTool.utf8))
 assert(!transcript.rows().contains { $0.itemID == "intro" }, "Completed intermediate prose belongs to the process")
 assert(transcript.rows(processEntryID: "reply").contains { $0.itemID == "intro" })
@@ -74,7 +75,7 @@ let multiStep = """
 {"itemId":"final","type":"text","text":"结论"}]}]
 """
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(multiStep.utf8))
-assert(transcript.rows().map(\.kind) == ["text", "summary", "text", "summary", "text"])
+assert(transcript.rows().map(\.kind) == ["text", "summary", "summary", "text", "summary", "summary", "text"])
 assert(transcript.rows(processEntryID: "steps", processStartID: "think1").map(\.itemID) == ["think1", "read"])
 assert(transcript.rows(processEntryID: "steps", processStartID: "think2").map(\.itemID) == ["think2", "write"])
 let closedSegments = transcript.rows().filter { $0.kind == "summary" }
@@ -84,8 +85,9 @@ transcript.entries[0].finished = true
 assert(transcript.rows().map(\.kind) == ["summary", "text", "meta"])
 assert(transcript.rows().last(where: { $0.kind == "text" })?.itemID == "final")
 transcript.entries[0].modelInfo = ChatEntry.ModelInfo(modelId: "actual", name: "Actual Model", thoughtLevel: "High")
-assert(transcript.rows().last?.text == "Actual Model · High")
-assert(transcript.rows().last?.imageAsset == "", "Unknown models must not invent a provider mark")
+assert(transcript.entries[0].modelInfo?.title == "Actual Model · High")
+assert(transcript.rows().last?.kind == "meta" && transcript.rows().last?.text == "",
+  "The footer keeps model details in turn information")
 assert(LodyAgentIcon.asset(modelId: "gpt-5.6-sol", name: "GPT-5.6 Sol") == "lody-agent-openai")
 assert(LodyAgentIcon.asset(modelId: "claude-opus-4", name: "Opus 4") == "lody-agent-claude")
 assert(LodyAgentIcon.asset(modelId: "grok-4.6", name: nil) == "lody-agent-grok")
@@ -96,17 +98,9 @@ let modelOnlyJSON = """
 [{"id":"no-text","role":"assistant","status":"completed","finished":true,
 "modelInfo":{"modelId":"id-only"},"items":[]}]
 """
-let modelOnlyRows = ChatTranscript(entries: try JSONDecoder().decode([ChatEntry].self, from: Data(modelOnlyJSON.utf8))).rows()
-assert(modelOnlyRows.last?.text == "id-only", "Model-only replies still show metadata")
-assert(modelOnlyRows.last?.imageAsset == "", "An unmatched model id stays text-only")
-let openaiMetaJSON = """
-[{"id":"openai-meta","role":"assistant","status":"completed","finished":true,
-"modelInfo":{"modelId":"gpt-5.6-sol","name":"GPT-5.6 Sol","thoughtLevel":"High"},"items":[]}]
-"""
-let openaiMetaRows = ChatTranscript(entries: try JSONDecoder().decode([ChatEntry].self, from: Data(openaiMetaJSON.utf8))).rows()
-assert(openaiMetaRows.last?.kind == "meta")
-assert(openaiMetaRows.last?.text == "GPT-5.6 Sol · High")
-assert(openaiMetaRows.last?.imageAsset == "lody-agent-openai", "Known providers put their mark on the model line")
+let modelOnlyEntries = try JSONDecoder().decode([ChatEntry].self, from: Data(modelOnlyJSON.utf8))
+assert(modelOnlyEntries.first?.modelInfo?.title == "id-only", "Turn information falls back to the model ID")
+assert(ChatTranscript(entries: modelOnlyEntries).rows().isEmpty)
 assert(transcript.rows(processEntryID: "steps").map(\.itemID) == ["first", "think1", "read", "middle", "think2", "write"])
 assert(transcript.rows(processEntryID: "steps", processStartID: "think1").map(\.itemID) == ["think1", "read"], "An open segment must not change scope on completion")
 print("Chat folding: live text boundaries, scoped process, and conclusion-only completion passed")
@@ -116,7 +110,8 @@ var segmentEntries = try JSONDecoder().decode([ChatEntry].self, from: Data(multi
 segmentEntries[0].items = Array(segmentEntries[0].items.prefix(3))
 segmentStream.receive(segmentEntries, animate: false, at: 10)
 let activeSegment = ChatTranscript(entries: segmentStream.presentation).rows().first { $0.kind == "summary" }!
-assert(activeSegment.running && activeSegment.text.contains("native.chat.transcript.activity.thinking"))
+assert(activeSegment.processStartID == "__thought__" && !activeSegment.running)
+assert(ChatTranscript(entries: segmentStream.presentation).rows().last?.running == true)
 segmentEntries[0].items = Array(try JSONDecoder().decode([ChatEntry].self, from: Data(multiStep.utf8))[0].items.prefix(6))
 segmentStream.receive(segmentEntries, animate: true, at: 33)
 let segmentRows = ChatTranscript(entries: segmentStream.presentation).rows().filter { $0.kind == "summary" }
@@ -124,7 +119,8 @@ assert(segmentRows[0].id == activeSegment.id && !segmentRows[0].running && !segm
 assert(segmentRows[0].text.contains("native.chat.transcript.status.workedFor") && !segmentRows[0].text.contains("native.chat.transcript.activity.thought"),
   "A completed segment replaces thinking copy with its frozen elapsed time")
 assert(segmentStream.presentation[0].items[1].processDurationMs == 23_000)
-assert(segmentRows[1].running && segmentRows[1].shines, "Only the newest segment keeps processing")
+assert(segmentRows.filter(\.running).map(\.processStartID) == ["write"] && segmentRows.last?.shines == true,
+  "Only the trailing tool group keeps processing")
 segmentEntries[0].items.append(try JSONDecoder().decode(ChatItem.self, from: Data(
   #"{"itemId":"housekeeping","type":"subagent_task","skipTranscript":true}"#.utf8
 )))
@@ -344,11 +340,10 @@ let completedWithNotice = """
 let noticeEntries = try JSONDecoder().decode([ChatEntry].self, from: Data(completedWithNotice.utf8))
 let noticeTranscript = ChatTranscript(entries: noticeEntries)
 assert(!noticeEntries.contains(where: \.isRunning), "A system notice is not an active assistant turn")
-assert(noticeTranscript.rows().map(\.kind) == ["summary", "text", "meta", "changesHeader", "changes"])
-assert(noticeTranscript.rows().last?.fileDiff?.path == "docs/.diff-check.md")
-assert(noticeTranscript.rows().last?.fileDiff?.add == 1)
-assert(noticeTranscript.rows().last?.group == "last")
-assert(noticeTranscript.rows().first { $0.kind == "changesHeader" }?.group == "first", "The header opens the file block")
+assert(noticeTranscript.rows().map(\.kind) == ["summary", "text", "changesHeader", "meta"])
+let changedFileRow = noticeTranscript.rows().first { $0.kind == "changesHeader" }
+assert(changedFileRow?.fileDiff?.add == 1 && changedFileRow?.fileDiff?.del == 1)
+assert(changedFileRow?.group == "only" && changedFileRow?.actionable == true, "The output row opens the file sheet")
 // A CLI harness has no compiled catalog, so plural rows fall back to the key;
 // the strings check covers the Foundation substitution itself.
 assert(noticeTranscript.rows().contains { $0.kind == "changesHeader" && $0.text == "native.chat.transcript.fileCount" })
@@ -369,10 +364,10 @@ let twoFiles = completedWithNotice.replacingOccurrences(
 )
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(twoFiles.utf8))
 let grouped = transcript.rows().filter { $0.kind == "changes" || $0.kind == "changesHeader" }
-assert(grouped.map(\.kind) == ["changesHeader", "changes", "changes"])
-assert(grouped[0].text == "native.chat.transcript.fileCount" && grouped[0].fileDiff?.add == 15 && grouped[0].fileDiff?.del == 5)
-assert(grouped.map(\.group) == ["first", "middle", "last"])
-print("File group: header totals and first/last membership passed")
+assert(grouped.map(\.kind) == ["changesHeader"])
+assert(grouped.first?.text == "native.chat.transcript.fileCount" && grouped.first?.fileDiff?.add == 15 && grouped.first?.fileDiff?.del == 5)
+assert(grouped.first?.group == "only")
+print("File output row includes totals from every changed path")
 
 let mixedFail = """
 [{"id":"mixed","role":"assistant","status":"completed","finished":true,"items":[
@@ -385,8 +380,7 @@ let mixedFail = """
 """
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(mixedFail.utf8))
 let mixedSummary = transcript.rows().first { $0.kind == "summary" }!
-assert(mixedSummary.attention)
-assert(mixedSummary.symbol == "exclamationmark.triangle.fill")
+assert(!mixedSummary.attention && mixedSummary.symbol.isEmpty)
 assert(!mixedSummary.text.contains("native.chat.transcript.status.failed"), mixedSummary.text)
 assert(!mixedSummary.text.contains("native.chat.transcript.status.done"), mixedSummary.text)
 assert(mixedSummary.text.contains("native.chat.transcript.activity.thought"), mixedSummary.text)
@@ -399,8 +393,8 @@ let liveThink = """
 {"itemId":"read","type":"tool_call","kind":"read","status":"in_progress"}]}]
 """
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(liveThink.utf8))
-let liveSummary = transcript.rows().first { $0.kind == "summary" }!
-assert(liveSummary.text.contains("native.chat.transcript.activity.thinking"), liveSummary.text)
+let liveSummary = transcript.rows().first { $0.processStartID == "read" }!
+assert(liveSummary.running && liveSummary.shines)
 assert(!liveSummary.text.contains("native.chat.transcript.status.running"), liveSummary.text)
 // Earlier process groups finish independently while only the latest group stays live.
 transcript.entries[0].items.append(try JSONDecoder().decode(ChatItem.self, from: Data(
@@ -410,10 +404,10 @@ transcript.entries[0].items.append(try JSONDecoder().decode(ChatItem.self, from:
   #"{"itemId":"next-thought","type":"thought","text":"Next step"}"#.utf8
 )))
 let liveGroups = transcript.rows().filter { $0.kind == "summary" }
-assert(liveGroups.count == 2)
+assert(liveGroups.count == 3)
 assert(liveGroups[0].text.contains("native.chat.transcript.activity.thought"))
-assert(liveGroups[1].text.contains("native.chat.transcript.activity.thinking"))
-assert(!liveGroups[0].running && liveGroups[1].running)
+assert(liveGroups.last?.text.contains("native.chat.transcript.activity.thinking") == true)
+assert(liveGroups.map(\.running) == [false, false, true])
 transcript.entries[0].finished = true
 let finishedGroup = transcript.rows().first { $0.kind == "summary" }!
 assert(!finishedGroup.running)
@@ -424,7 +418,7 @@ let previewKinds = Set(previewRows.map(\.kind))
 assert(previewKinds.contains("summary"))
 assert(previewKinds.contains("text"))
 assert(!previewKinds.contains("meta"), "Read-only context-menu peeks omit message actions")
-assert(previewRows.contains { $0.kind == "summary" && $0.attention })
+assert(previewRows.contains { $0.kind == "summary" && !$0.attention })
 assert(ChatTranscript.previewRows(from: "{}").isEmpty)
 assert(
   ChatTranscriptPreviewMetrics.itemWidth(collectionWidth: 0) == 288,
@@ -441,7 +435,7 @@ assert(
 print("Process summary enumerates activity and keeps partial failures off the title")
 
 var stream = ChatStream()
-stream.receive([], animate: true)
+stream.receive([], animate: false, at: 0)
 let live = try JSONDecoder().decode([ChatEntry].self, from: Data(json.utf8))
 stream.receive(live, animate: true, at: 0)
 assert(stream.hasPending)
@@ -462,7 +456,7 @@ let corrected = json.replacingOccurrences(of: "最终答案", with: "更正后�
 stream.receive(try JSONDecoder().decode([ChatEntry].self, from: Data(corrected.utf8)), animate: true)
 assert(stream.presentation[0].items[2].text == "更正后的答案", "Replacement must not replay an obsolete suffix")
 var unicodeStream = ChatStream()
-unicodeStream.receive([], animate: true)
+unicodeStream.receive([], animate: false, at: 0)
 let unicode = json.replacingOccurrences(of: "最终答案", with: "👩🏽‍💻你好é")
 unicodeStream.receive(try JSONDecoder().decode([ChatEntry].self, from: Data(unicode.utf8)), animate: true, at: 0)
 unicodeStream.advance(at: 0.024)
@@ -859,21 +853,22 @@ let taskJSON = """
 """
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(taskJSON.utf8))
 assert(transcript.liveSubagentItems().map(\.itemId) == ["explore"])
-let liveTaskRows = transcript.rows().filter { $0.kind == "subagent_task" }
-assert(liveTaskRows.map(\.itemID) == ["explore", "done"])
+let liveTaskCards = transcript.rows().filter { $0.kind == "tasksHeader" }
+assert(liveTaskCards.count == 1 && liveTaskCards.first?.running == true && liveTaskCards.first?.actionable == true)
 assert(!transcript.rows().contains { $0.itemID == "house" })
-assert(liveTaskRows.allSatisfy(\.actionable))
-assert(liveTaskRows[0].subagent == ChatSubagentCard(actor: "Explore", description: "Find chrome", status: "in_progress",
+let taskSheetRows = transcript.rows(processEntryID: "reply", processStartID: "__tasks__")
+assert(taskSheetRows.map(\.itemID) == ["explore", "done"] && taskSheetRows.allSatisfy(\.actionable))
+assert(taskSheetRows.first?.subagent == ChatSubagentCard(actor: "Explore", description: "Find chrome", status: "in_progress",
   detail: String.localizedStringWithFormat(String(localized: "native.chat.subagent.runningTool", bundle: .lody), String(describing: "Read")), background: false))
 assert(transcript.rows().contains { $0.kind == "summary" })
 let processTasks = transcript.rows(processEntryID: "reply")
 assert(processTasks.contains { $0.itemID == "explore" && $0.kind == "subagent_task" })
 assert(processTasks.contains { $0.itemID == "done" && $0.kind == "subagent_task" })
 assert(!processTasks.contains { $0.itemID == "house" })
-assert(transcript.rows(processEntryID: "reply", processStartID: "__tasks__").map(\.itemID) == ["explore", "done"])
 transcript.entries[0].finished = true
-assert(transcript.rows().filter { $0.kind == "subagent_task" }.map(\.itemID) == ["explore", "done"])
-print("Chat: subagent task cards stay in the main list around the process and skip housekeeping")
+assert(transcript.rows().last?.kind == "tasksHeader")
+assert(transcript.rows(processEntryID: "reply", processStartID: "__tasks__").map(\.itemID) == ["explore", "done"])
+print("Chat: one task output row opens the ordered tasks and skips housekeeping")
 
 transcript.entries = try JSONDecoder().decode([ChatEntry].self, from: Data(#"[{"id":"child","role":"assistant","status":"completed","finished":true,"items":[{"itemId":"header","type":"text","text":"Explore"},{"itemId":"thought","type":"thought","text":"Check callers"},{"itemId":"read","type":"tool_call","kind":"read","title":"Read composer","hasDetail":true},{"itemId":"answer","type":"text","text":"Found the chip row"}]}]"#.utf8))
 let childRows = transcript.rows(processEntryID: "child", processStartID: "__subagent__")
@@ -1002,25 +997,19 @@ let hangJSON = """
 {"itemId":"b","type":"subagent_task","taskId":"b","status":"failed","actor":"Review","description":"Check tests"}]}]
 """
 let hangRows = ChatTranscript(entries: try JSONDecoder().decode([ChatEntry].self, from: Data(hangJSON.utf8))).rows(now: 999_999)
-assert(hangRows.map(\.kind) == ["duration", "subagent_task", "subagent_task", "text", "meta"],
-  "Sub-agents hang under the process row, above the answer")
-assert(hangRows[0].treeDown && hangRows[1].treeChild && !hangRows[1].treeLast && hangRows[2].treeChild && hangRows[2].treeLast,
-  "The tree runs from the process row to the last sub-agent")
-assert(hangRows.filter { $0.kind == "subagent_task" }.map(\.itemID) == ["a", "b"], "Sub-agents keep item order")
+assert(hangRows.map(\.kind) == ["duration", "text", "tasksHeader", "meta"],
+  "The single task output row follows the answer and precedes the footer")
 var heldEntries = try JSONDecoder().decode([ChatEntry].self, from: Data(hangJSON.utf8))
 heldEntries[0].holdOpen = true
 let heldRows = ChatTranscript(entries: heldEntries).rows(now: 999_999)
 assert(!heldRows.contains { $0.kind == "duration" }, "A held turn has no process row")
-assert(heldRows.filter { $0.kind == "subagent_task" }.allSatisfy { !$0.treeChild && !$0.treeLast },
-  "Without a process row sub-agents stay top-level")
-let heldKinds = heldRows.map(\.kind)
-assert(heldKinds.firstIndex(of: "text")! < heldKinds.firstIndex(of: "subagent_task")!, "Without a process row sub-agents keep item order")
+assert(Array(heldRows.map(\.kind).suffix(2)) == ["text", "tasksHeader"] && !heldRows.contains { $0.kind == "meta" },
+  "A held turn keeps its task output below the answer and defers the footer")
 var runningHang = try JSONDecoder().decode([ChatEntry].self, from: Data(hangJSON.utf8))
 runningHang[0].finished = false
 let runningHangRows = ChatTranscript(entries: runningHang).rows(now: 30_000)
-assert(Array(runningHangRows.map(\.kind).prefix(3)) == ["duration", "subagent_task", "subagent_task"],
-  "Live sub-agents also hang under the process row")
-print("Process rail: live merge, line two, sub-agent tree placement and held turns passed")
+assert(runningHangRows.last?.kind == "tasksHeader", "A running turn's task output follows its transcript")
+print("Task output stays below the transcript for finished, held and running turns")
 
 // DSH thoughts are separate disclosures: streaming, toggles and finished work retain their order.
 let dshThoughtsJSON = #"[{"id":"dsh-fold","role":"assistant","status":"running","finished":false,"items":[{"itemId":"think","type":"thought","text":"Private reasoning"},{"itemId":"tool","type":"tool_call","kind":"read","title":"Read"},{"itemId":"reply","type":"text","text":"Answer"}]}]"#

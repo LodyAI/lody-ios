@@ -308,7 +308,9 @@ private final class SessionPreviewFixture {
 
   private func emit(forceLive: Bool = false) {
     let status = offline && !forceLive ? "offline" : "live"
-    var session = Self.envelope(status: status, revision: revision, reply: "Live reply with a needle", tools: tools)
+    var session = Self.envelope(
+      status: status, revision: revision, reply: "Live reply with a needle", tools: tools, reportsHistorySync: offline
+    )
     if bar.hasPrefix("bar-"), let data = session?.data(using: .utf8),
        var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
        var entries = object["entries"] as? [[String: Any]] {
@@ -476,7 +478,9 @@ private final class SessionPreviewFixture {
     return String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
   }
 
-  nonisolated static func envelope(status: String, revision: Int, reply: String, tools: Bool = false) -> String? {
+  nonisolated static func envelope(
+    status: String, revision: Int, reply: String, tools: Bool = false, reportsHistorySync: Bool = false
+  ) -> String? {
     var object: [String: Any] = [
       "v": 1, "status": status, "revision": revision,
       "preview": ["label": "localhost:5173", "active": true],
@@ -498,6 +502,7 @@ private final class SessionPreviewFixture {
         ],
       ],
     ]
+    if reportsHistorySync { object["historySync"] = ["source": "machine", "phase": "pending"] }
     if tools {
       var entries = object["entries"] as! [[String: Any]]
       entries[1]["items"] = [

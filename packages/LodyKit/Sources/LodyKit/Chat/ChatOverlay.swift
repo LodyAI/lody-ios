@@ -6,22 +6,18 @@ final class ChatOverlay: UIView {
     case idle
     case connecting
     case paused
-    case history(label: String, reconnect: Bool)
   }
 
   static let controlSize: CGFloat = 44
   static let visualSize: CGFloat = 30
   static let tasksProcessStartID = "__tasks__"
 
-  static func slot(connection: String, historySyncLabel: String? = nil) -> Slot {
-    let connectionSlot: Slot = switch connection {
+  static func slot(connection: String) -> Slot {
+    switch connection {
     case "paused": .paused
     case "connecting": .connecting
     default: .idle
     }
-    guard let historySyncLabel else { return connectionSlot }
-    let label = connectionSlot == .idle ? historySyncLabel : historySyncLabel + "\n" + connectionSlot.title
-    return .history(label: label, reconnect: connectionSlot.isActionable)
   }
 
   var slot = Slot.idle {
@@ -150,7 +146,6 @@ final class ChatOverlay: UIView {
     var configuration = statusButton.configuration ?? .plain()
     if showStatus {
       configuration.title = slot.title
-      configuration.titleLineBreakMode = slot.title.contains("\n") ? .byWordWrapping : .byTruncatingTail
       statusButton.configuration = configuration
       statusButton.accessibilityLabel = slot.title
     }
@@ -168,11 +163,7 @@ final class ChatOverlay: UIView {
 
 private extension ChatOverlay.Slot {
   var isActionable: Bool {
-    switch self {
-    case .paused: true
-    case .history(_, let reconnect): reconnect
-    default: false
-    }
+    self == .paused
   }
 
   var title: String {
@@ -180,7 +171,6 @@ private extension ChatOverlay.Slot {
     case .paused: String(localized: "native.chat.connection.paused", bundle: .lody)
     case .connecting: String(localized: "native.chat.connection.connecting", bundle: .lody)
     case .idle: ""
-    case .history(let label, _): label
     }
   }
 }

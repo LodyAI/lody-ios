@@ -5,69 +5,6 @@ struct SessionBrowserPreview: Equatable, Sendable {
   var active: Bool
 }
 
-struct RoostHistorySync: Equatable, Sendable {
-  enum Source: String, Sendable { case machine, streams }
-  enum Phase: String, Sendable {
-    case idle, checking, pending, syncing, ready, retrying, refused
-    case ownerRequired = "owner-required"
-  }
-
-  let source: Source
-  let phase: Phase
-  let httpStatus: Int?
-  let newerVersionPending: Bool
-
-  init(source: Source, phase: Phase, httpStatus: Int? = nil, newerVersionPending: Bool = false) {
-    self.source = source
-    self.phase = phase
-    self.httpStatus = httpStatus
-    self.newerVersionPending = newerVersionPending
-  }
-
-  init?(_ object: [String: Any]) {
-    guard let source = Source(rawValue: object["source"] as? String ?? ""),
-      let phase = Phase(rawValue: object["phase"] as? String ?? "") else { return nil }
-    self.source = source
-    self.phase = phase
-    httpStatus = (object["httpStatus"] as? Int).flatMap { (100...599).contains($0) ? $0 : nil }
-    newerVersionPending = object["newerVersionPending"] as? Bool == true
-  }
-
-  /// Web `RoostHistorySyncIndicator`: healthy history (`idle` / `ready` at the latest version)
-  /// reports nothing, and active notices omit the source line.
-  func label(bundle: Bundle) -> String? {
-    let detail: String? = switch phase {
-    case .idle, .ready: nil
-    case .checking: String(localized: "native.chat.historySync.checking", bundle: bundle)
-    case .pending: String(localized: "native.chat.historySync.pending", bundle: bundle)
-    case .ownerRequired:
-      String(localized: "native.chat.historySync.ownerRequired", bundle: bundle)
-    case .syncing: String(localized: "native.chat.historySync.syncing", bundle: bundle)
-    case .retrying where httpStatus == 403:
-      String(localized: "native.chat.historySync.unconfirmed", bundle: bundle)
-    case .retrying:
-      if let httpStatus {
-        String(format: String(localized: "native.chat.historySync.retryingHttp", bundle: bundle), httpStatus)
-      } else {
-        String(localized: "native.chat.historySync.retrying", bundle: bundle)
-      }
-    case .refused where httpStatus == 401 || httpStatus == 403:
-      String(localized: "native.chat.historySync.denied", bundle: bundle)
-    case .refused:
-      if let httpStatus {
-        String(format: String(localized: "native.chat.historySync.refused", bundle: bundle), httpStatus)
-      } else {
-        String(localized: "native.chat.historySync.unavailable", bundle: bundle)
-      }
-    }
-    let previous = newerVersionPending && source == .streams
-      ? String(localized: "native.chat.historySync.previous", bundle: bundle)
-      : nil
-    let lines = [detail, previous].compactMap { $0 }
-    return lines.isEmpty ? nil : lines.joined(separator: "\n")
-  }
-}
-
 struct SessionEnvelope: Sendable {
   var version: Int?
   var revision: Int?
@@ -79,7 +16,6 @@ struct SessionEnvelope: Sendable {
   var billableTurnCount: Int?
   var historyHasMore = false
   var historyLoading = false
-  var historySync: RoostHistorySync?
   var composerJSON: String?
   var usageJSON: String?
   var preview: SessionBrowserPreview?
@@ -102,7 +38,6 @@ struct SessionEnvelope: Sendable {
     envelope.billableTurnCount = (object["billableTurnCount"] as? NSNumber)?.intValue
     envelope.historyHasMore = object["historyHasMore"] as? Bool == true
     envelope.historyLoading = object["historyLoading"] as? Bool == true
-    envelope.historySync = (object["historySync"] as? [String: Any]).flatMap(RoostHistorySync.init)
     if let composer = object["composer"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: composer) {
       envelope.composerJSON = String(decoding: data, as: UTF8.self)
     }

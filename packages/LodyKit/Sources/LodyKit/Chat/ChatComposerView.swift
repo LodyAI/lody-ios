@@ -34,7 +34,6 @@ private struct ChatComposerState: Decodable {
   var quotaNotice: String?
   var reconnect = false
   var connection: String?
-  var historySyncLabel: String?
   var placeholder = String(localized: "native.chat.composer.placeholder", bundle: .lody)
 }
 
@@ -1343,6 +1342,11 @@ final class ChatComposerView: UIView, UITextViewDelegate {
   private var failedDraft: ChatPendingSend?
 
   func setPendingSend(_ pending: ChatPendingSend) {
+    if pending.phase == "accepted", pending.rpcAccepted == false {
+      // A durable handoff can arrive after the clear token has already been applied.
+      clearPendingSend(id: pending.id)
+      return
+    }
     guard pending.id != restoredSendID, pending.id != acknowledgedSendID else { return }
     if pending.failed == true {
       pendingDraft = nil
@@ -1733,7 +1737,6 @@ final class ChatComposerView: UIView, UITextViewDelegate {
     }
   }
   var connection: String { state.connection ?? "" }
-  var historySyncLabel: String? { state.historySyncLabel }
 
   private(set) var suppressesComposer = false
 

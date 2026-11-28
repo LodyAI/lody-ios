@@ -28,7 +28,6 @@ struct SessionFeedState: Equatable, Sendable {
   var billableTurnCount: Int?
   var historyHasMore = false
   var historyLoading = false
-  var historySync: RoostHistorySync?
   var composerJSON: String?
   var usageJSON: String?
   var preview: SessionBrowserPreview?
@@ -127,7 +126,6 @@ final class SessionFeed {
     awaitingSnapshot = true
     state.sendReady = false
     state.controlReady = false
-    state.historySync = nil
     changed?()
     service.reconnect(sessionId)
   }
@@ -149,7 +147,6 @@ final class SessionFeed {
             self.state.status = phase
             self.state.sendReady = false
             self.state.controlReady = false
-            self.state.historySync = nil
             self.state.isLiveUpdate = false
             self.awaitingSnapshot = true
             self.changed?()
@@ -173,7 +170,6 @@ final class SessionFeed {
       state.status = "offline"
       state.sendReady = false
       state.controlReady = false
-      state.historySync = nil
       state.isLiveUpdate = false
       awaitingSnapshot = true
       changed?()
@@ -183,7 +179,6 @@ final class SessionFeed {
       state.overflow = true
       state.sendReady = false
       state.controlReady = false
-      state.historySync = nil
       state.isLiveUpdate = false
       awaitingSnapshot = true
       changed?()
@@ -202,7 +197,7 @@ final class SessionFeed {
       state = SessionFeedState(
         status: envelope.status, revision: revision, sendReady: sendReady, controlReady: controlReady, entriesJSON: envelope.entriesJSON,
         billableTurnCount: envelope.billableTurnCount, historyHasMore: envelope.historyHasMore,
-        historyLoading: envelope.historyLoading, historySync: envelope.historySync, composerJSON: envelope.composerJSON,
+        historyLoading: envelope.historyLoading, composerJSON: envelope.composerJSON,
         usageJSON: envelope.usageJSON, preview: envelope.preview, transcript: envelope.transcript
       )
       state.isLiveUpdate = isLiveUpdate
@@ -210,7 +205,6 @@ final class SessionFeed {
       state.isLiveUpdate = false
       awaitingSnapshot = true
       state.status = envelope.status
-      state.historySync = envelope.historySync
       state.sendReady = false
       state.controlReady = false
     }

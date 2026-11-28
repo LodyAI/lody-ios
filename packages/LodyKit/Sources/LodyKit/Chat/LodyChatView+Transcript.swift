@@ -218,7 +218,7 @@ extension LodyChatView {
       overlay.slot = .idle
       return
     }
-    overlay.slot = ChatOverlay.slot(connection: composer.connection, historySyncLabel: composer.historySyncLabel)
+    overlay.slot = ChatOverlay.slot(connection: composer.connection)
   }
 
   func applyRows() {

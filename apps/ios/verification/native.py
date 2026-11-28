@@ -46,7 +46,7 @@ checks = {
     'scroll-edges': ['Chrome/LodyScrollEdges.swift', 'LodyTint.swift', 'Chrome/LodyEdgeFade.swift'],
     'glass-transition': [],
     'github-mentions': ['Cloud/GitHubMentions.swift'],
-    'github-pr': ['Cloud/GitHubPullRequests.swift'],
+    'github-pr': ['Cloud/GitHubPullRequests.swift', 'Sessions/SessionCatalog.swift', 'Sessions/SessionInfoBar.swift'],
     'session-sharing': ['Cloud/SessionSharing.swift'],
     'settings': ['Cloud/WorkspaceSettingsCloud.swift', 'Cloud/WorkspaceUsage.swift'],
     'workspace-settings-pages': ['LodyLocalization.swift', 'List/LodyListModels.swift', 'Settings/SettingsWorkspace.swift', 'Settings/ProjectVisibilitySections.swift', 'Settings/GitHubSettingsSections.swift'],
@@ -57,12 +57,12 @@ checks = {
     'notifications': ['Notifications/PushRegistration.swift', 'Notifications/PushPermissionLaunchRequest.swift', 'Notifications/PushClickBuffer.swift'],
     'diagnostics': ['Diagnostics/DiagnosticsStore.swift'],
     'photo-cache': ['List/PhotoDiskCache.swift'],
-    'file-link': ['Chat/ChatFileLink.swift', 'Sessions/SessionController+Files.swift', 'Shell/LodyPageController.swift', 'LodyLocalization.swift'],
+    'file-link': ['Chat/ChatFileLink.swift', 'Sessions/SessionController+Files.swift', 'Shell/LodyPageController.swift', 'Shell/LodyPageStackHost.swift', 'Chrome/LodyTraitChanges.swift', 'LodyLocalization.swift'],
     'strings': ['LodyLocalization.swift'],
     'auth': ['LodyLocalization.swift', 'Auth/AuthAPI.swift', 'Auth/NativeAuthHandoff.swift'],
-    'auth-session': ['LodyLocalization.swift', 'Auth/AuthAPI.swift', 'Auth/AuthSession.swift', 'Auth/NativeLoginMethod.swift', 'Onboarding/OnboardingService.swift', 'Onboarding/LoginAppearance.swift', 'Onboarding/LoginDitherView.swift', 'Onboarding/OnboardingController.swift', 'Onboarding/PasswordResetController.swift'],
+    'auth-session': ['LodyLocalization.swift', 'Chrome/LodyTraitChanges.swift', 'Auth/AuthAPI.swift', 'Auth/AuthSession.swift', 'Auth/NativeLoginMethod.swift', 'Onboarding/OnboardingService.swift', 'Onboarding/LoginAppearance.swift', 'Onboarding/LoginDitherView.swift', 'Onboarding/OnboardingController.swift', 'Onboarding/PasswordResetController.swift'],
     'session-permission': ['Sessions/PermissionProjection.swift', 'Sessions/SessionPermission.swift', 'Sessions/SessionEnvelope.swift'],
-    'session-decisions': ['LodyLocalization.swift', 'Sessions/SessionEnvelope.swift', 'Sessions/SessionPermission.swift', 'Sessions/SessionDecisions.swift'],
+    'session-decisions': ['LodyLocalization.swift', 'Sessions/SessionCatalog.swift', 'Sessions/SessionEnvelope.swift', 'Sessions/SessionPermission.swift', 'Sessions/SessionDecisions.swift'],
     'outbox': ['LodyLocalization.swift', 'Sessions/SessionCatalog.swift', 'Sessions/SessionSender.swift', 'Outbox/OutboxRecord.swift', 'Outbox/OutboxStore.swift', 'Outbox/OutboxDispatcher.swift', 'Outbox/OutboxForeground.swift', 'CreateSession/CreateSessionSubmission.swift', 'Auth/WorkspaceModePins.swift', 'Sessions/SessionEnvelope.swift', 'Sessions/SessionPermission.swift'],
     'chat-execution': ['LodyLocalization.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatMessageShare.swift', 'Chat/ChatStream.swift', 'Chat/ChatHaptics.swift', 'Chat/ChatImagePreviewGeometry.swift', 'Chat/ChatImageGallery.swift'],
     'chat': ['LodyLocalization.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatMessageShare.swift', 'Chat/ChatStream.swift', 'Chat/ChatHaptics.swift', 'Chat/ChatImagePreviewGeometry.swift', 'Chat/ChatImageGallery.swift'],
@@ -71,15 +71,15 @@ checks = {
     'chat-tools': ['LodyLocalization.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatMessageShare.swift', 'Chat/ChatStream.swift', 'Chat/ChatHaptics.swift', 'Chat/ChatImagePreviewGeometry.swift', 'Chat/ChatImageGallery.swift'],
     'markdown-repair': ['Chat/ChatMarkdownRepair.swift'],
     'watchdog': [],
-    'local-store': ['Cloud/LocalStore.swift', 'Cloud/SessionProse.swift', 'Text/MarkdownPlainText.swift', 'Text/MarkdownRuby.swift', 'Text/TextSearch.swift', 'LodyLocalization.swift'],
+    'local-store': ['Cloud/LocalStore.swift', 'Cloud/SessionProse.swift', 'Chat/ChatCarriedPlan.swift', 'Text/MarkdownPlainText.swift', 'Text/MarkdownRuby.swift', 'Text/TextSearch.swift', 'LodyLocalization.swift'],
     'content-store': ['Cloud/ContentStore.swift'],
     'chat-render': ['Chrome/LodyGlass.swift', 'List/ConversationTabStrip.swift', 'List/ConversationTreeRow.swift', 'Chat/ChatOperationCell.swift', 'Chat/ChatMessageActionsCell.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift', 'LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Appearance/LodyDesign.swift', 'List/LodyStatusGlyph.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatImageGallery.swift', 'Chat/ChatThrowCurve.swift', 'Chat/ChatAttachments.swift', 'Chat/ChatSendHandoff.swift', 'Chat/ChatReferenceNode.swift', 'Chat/ChatNumericText.swift', 'Chat/ChatCell.swift', 'Chat/ChatAuthorHeader.swift', 'Chat/ChatUserMentions.swift', 'Chrome/LodyTraitChanges.swift', 'Chat/ChatMessageQuote.swift'],
-    'chat-subagent': ['LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Appearance/LodyDesign.swift', 'List/LodyStatusGlyph.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatThrowCurve.swift', 'Chat/ChatAttachments.swift', 'Chat/ChatSendHandoff.swift', 'Chat/ChatNumericText.swift', 'Chat/ChatCell.swift', 'Chat/ChatUserMentions.swift', 'Chat/ChatSubagentCell.swift'],
-    'chat-files': ['LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Appearance/LodyDesign.swift', 'List/LodyStatusGlyph.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatThrowCurve.swift', 'Chat/ChatAttachments.swift', 'Chat/ChatSendHandoff.swift', 'Chat/ChatNumericText.swift', 'Chat/ChatCell.swift', 'Chat/ChatUserMentions.swift', 'Chat/ChatFileCell.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift'],
-    'chat-chrome': ['Chrome/LodyGlass.swift', 'LodyLocalization.swift', 'Sessions/SessionPermission.swift', 'Sessions/SessionEnvelope.swift', 'Chat/ChatOverlay.swift'],
-    'model-panel': ['LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Chat/ChatComposerModelPanel.swift'],
-    'composer': COMPOSER,
-    'composer-dictation': COMPOSER,
+    'chat-subagent': ['LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Appearance/LodyDesign.swift', 'Chrome/LodyTraitChanges.swift', 'List/LodyStatusGlyph.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatThrowCurve.swift', 'Chat/ChatAttachments.swift', 'Chat/ChatSendHandoff.swift', 'Chat/ChatNumericText.swift', 'Chat/ChatCell.swift', 'Chat/ChatUserMentions.swift', 'Chat/ChatSubagentCell.swift'],
+    'chat-files': ['LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Appearance/LodyDesign.swift', 'Chrome/LodyTraitChanges.swift', 'List/LodyStatusGlyph.swift', 'Chat/LodyAgentIcon.swift', 'Chat/ChatTranscript.swift', 'Chat/ChatThrowCurve.swift', 'Chat/ChatAttachments.swift', 'Chat/ChatSendHandoff.swift', 'Chat/ChatNumericText.swift', 'Chat/ChatCell.swift', 'Chat/ChatUserMentions.swift', 'Chat/ChatFileCell.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift'],
+    'chat-chrome': ['Chrome/LodyGlass.swift', 'LodyLocalization.swift', 'Chat/ChatOverlay.swift'],
+    'model-panel': ['LodyLocalization.swift', 'LodyTint.swift', 'UIFont+Dynamic.swift', 'Chrome/LodyTraitChanges.swift', 'Chat/ChatComposerModelPanel.swift'],
+    'composer': COMPOSER.copy(),
+    'composer-dictation': COMPOSER.copy(),
     'throw-frame-rate': ['Chat/ChatThrowCurve.swift'],
     'attachments': ['LodyLocalization.swift', 'Diagnostics/DiagnosticsStore.swift', 'Cloud/SessionAttachments.swift', 'Auth/WorkspaceModePins.swift'],
     'inline-diff': ['UIFont+Dynamic.swift', 'Diff/InlineDiffModel.swift', 'Diff/InlineDiffRenderer.swift', 'Diff/DiffDocumentModel.swift', 'Diff/DiffDocumentLayout.swift'],
@@ -89,7 +89,10 @@ checks = {
         'Chrome/LodyMenuButtonStyle.swift',
         'Chrome/LodyMenuButton.swift',
         'Chrome/WorkspaceSwitcherPanel.swift',
+        'Chrome/LodyTraitChanges.swift',
+        'Sessions/HomeOnboardingView.swift',
         'Sessions/SessionListView.swift',
+        'List/UICollectionView+ReturnSelection.swift',
         'LodyTint.swift',
         'List/LodyListCellBackground.swift',
         'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift',
@@ -103,7 +106,7 @@ checks = {
         'Text/TextSearch.swift',
     ],
     'list-snapshots': ['List/LodyListModels.swift'],
-    'chat-list-scroll': ['Sessions/ChatListCollectionView.swift', 'Sessions/InboxProjectIndex.swift', 'Projects/RepositoryIcon.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift', 'LodyTint.swift'],
+    'chat-list-scroll': ['Sessions/ChatListCollectionView.swift', 'Sessions/InboxProjectIndex.swift', 'Projects/RepositoryIcon.swift', 'List/LodyListModels.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift', 'LodyTint.swift'],
     'banner': [
         'Chrome/LodyGlass.swift',
         'LodyLocalization.swift',
@@ -116,7 +119,7 @@ checks = {
     'session-roles': ['LodyLocalization.swift', 'CreateSession/CreateSessionForm.swift', 'Sessions/SessionRoles.swift'],
     'unified-patch': ['Diff/UnifiedPatch.swift'],
     'create-draft': ['LodyLocalization.swift', 'CreateSession/CreateSessionForm.swift', 'Outbox/OutboxRecord.swift', 'CreateSession/CreateDraftRecord.swift'],
-    'share-ingest': ['LodyLocalization.swift', 'Chat/ChatAttachments.swift', 'CreateSession/CreateSessionForm.swift', 'CreateSession/ShareStore.swift', str(root / 'apps/ios/Extensions/Share/ShareIngest.swift')],
+    'share-ingest': ['LodyLocalization.swift', 'LodyTint.swift', 'Chat/ChatAttachments.swift', 'Chat/ChatMessageQuote.swift', 'CreateSession/CreateSessionForm.swift', 'CreateSession/ShareStore.swift', str(root / 'apps/ios/Extensions/Share/ShareIngest.swift')],
     'share': ['LodyLocalization.swift', 'CreateSession/CreateSessionForm.swift', 'CreateSession/ShareStore.swift',
         'Shell/NativeShareCoordinator.swift', 'Auth/WorkspaceModePins.swift', 'CreateSession/CreateDraftRecord.swift', 'Outbox/OutboxRecord.swift', 'Sessions/SessionCatalog.swift', 'Sessions/SessionRows.swift',
         'Sessions/InboxSections.swift', 'Sessions/HomeGrouping.swift', 'List/LodyListModels.swift', 'Settings/LodyListState.swift'],
@@ -139,11 +142,17 @@ for files in checks.values():
         files.extend(['Projects/RepositoryIcon.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift'])
         files.append('Chat/ChatShortcutInsertion.swift')
     if 'Chat/ChatTranscript.swift' in files:
-        if 'Chat/ChatMessageQuote.swift' not in files:
-            files.append('Chat/ChatMessageQuote.swift')
-        files.append('Chat/ChatPendingSend.swift')
-        files.append('Chat/ChatTurnMetadata.swift')
-    if 'Chat/ChatSendHandoff.swift' in files or 'Chat/ChatMentionPanel.swift' in files:
+        for dependency in ['Chat/ChatPendingSend.swift', 'Chat/ChatTurnMetadata.swift', 'Chat/ChatImageGallery.swift',
+                           'Chat/ChatCarriedPlan.swift', 'Chat/ChatMessageQuote.swift']:
+            if dependency not in files:
+                files.append(dependency)
+    if 'Chat/ChatCell.swift' in files:
+        for dependency in ['Chat/ChatAuthorHeader.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift']:
+            if dependency not in files:
+                files.append(dependency)
+    if 'Chat/ChatSendHandoff.swift' in files and 'Chat/ChatReferenceNode.swift' not in files:
+        files.append('Chat/ChatReferenceNode.swift')
+    if 'LodyUIVerify.swift' not in files and ('Chat/ChatSendHandoff.swift' in files or 'Chat/ChatMentionPanel.swift' in files):
         files.insert(0, 'LodyUIVerify.swift')
     if 'Auth/AuthAPI.swift' in files:
         files.append('Auth/WorkspaceModePins.swift')
@@ -347,7 +356,9 @@ with tempfile.TemporaryDirectory(prefix='lody-native-verify-') as output:
             resources.mkdir()
             subprocess.run(['xcrun', 'xcstringstool', 'compile', str(kit / 'Sources/LodyKit/Resources/Localizable.xcstrings'),
                             '--output-directory', str(resources)], check=True)
-            subprocess.run([binary, str(resources)], check=True, timeout=60)
+            # Foundation formats plurals using the process locale.
+            subprocess.run([binary, str(resources), '-AppleLanguages', '(en)', '-AppleLocale', 'en_US'],
+                           check=True, timeout=60)
         elif name == 'attachments':
             with subprocess.Popen([sys.executable, str(checks_root / 'attachments/progress-server.py')], stdout=subprocess.PIPE, text=True) as server:
                 try:

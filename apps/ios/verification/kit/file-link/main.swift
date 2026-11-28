@@ -7,7 +7,10 @@ import UIKit
   assert(ChatFileLink("C:\\repo\\sample.swift:2")?.path == "C:/repo/sample.swift")
   assert(ChatFileLink("C:\\repo\\sample.swift:2")?.line == 2)
   assert(ChatFileLink("../photo.png")?.path == "../photo.png")
-  for href in ["https://example.com/report.md", "javascript:alert(1)", "file:///etc/passwd", "//example.com/a.md", "#heading", "report.md?download", "a%00.md"] {
+  assert(ChatFileLink("file:///workspace/report.html#L12")?.path == "/workspace/report.html")
+  assert(ChatFileLink("file:///workspace/report.html#L12")?.line == 12)
+  assert(ChatFileLink("file://localhost/C:/repo/report.html")?.path == "C:/repo/report.html")
+  for href in ["https://example.com/report.md", "javascript:alert(1)", "file://example.com/report.md", "//example.com/a.md", "#heading", "report.md?download", "a%00.md"] {
     assert(ChatFileLink(href) == nil, href)
   }
   print("PASS: file links preserve paths and line anchors while rejecting external schemes and malformed targets")
@@ -34,6 +37,11 @@ import UIKit
 extension Notification.Name { static let lodyAppearanceDidChange = Notification.Name("testAppearance") }
 @MainActor enum LodyScrollEdges { static let ownerChanged = Notification.Name("testScrollOwner") }
 extension UIColor { static var lodyGroupedBackground: UIColor { .systemGroupedBackground } }
+@MainActor final class LodyShell {
+  static let shared = LodyShell()
+  func configureNavigation(_ navigation: UINavigationController) {}
+  func close(from controller: UIViewController) {}
+}
 
 @MainActor final class DismissalNavigation: UINavigationController {
   var dismissing = false

@@ -764,14 +764,16 @@ let white = Int(detailPixels[(54 * 108 + 53) * 4])
 assert(white - black > 200, "One-pixel avatar detail must survive, not be blurred by a 1x intermediate")
 print("PASS: cached circular avatars preserve Retina resolution and image detail")
 
-// Only list rendering is stubbed here; retry ownership, UIButton and trait switching
+// The underlying chat list is stubbed here; retry ownership, UIButton and trait switching
 // run through the production SessionListView wrapper.
 struct WorkspaceMember: Equatable {}
 struct LodyListSection { var rows: [LodyListRow] = [] }
+struct ChatListStatusHooks {}
 @MainActor final class ChatListView: UIView {
-  let collection = UIScrollView()
+  let collection = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewFlowLayout())
   var forwarded: ((String, [String: Any]) -> Void)?
   var owners: [String: WorkspaceMember] = [:]
+  var status: ChatListStatusHooks?
   var archivedStyle = false
   var projectIndexEnabled = false
   var pinsGroupLabels = false
