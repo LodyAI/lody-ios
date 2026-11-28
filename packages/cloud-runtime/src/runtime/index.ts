@@ -155,10 +155,17 @@ const { machineReplicas, catalogs, unhealthy } = state;
 let stopPresence: (() => void) | undefined;
 function startPresence() {
   stopPresence?.();
-  stopPresence = watchMachinePresence(state.workspace, getGrant, (value) => {
-    state.presence = value;
-    channel.emit('machinePresence', value);
-  });
+  stopPresence = watchMachinePresence(
+    state.workspace,
+    getGrant,
+    (value) => {
+      state.presence = value;
+      channel.emit('machinePresence', value);
+    },
+    (reader) => {
+      state.getLiveSessionPresence = reader;
+    },
+  );
 }
 
 /** What the Status view layout and planner read, at the server clock's now. */
@@ -899,6 +906,7 @@ const ctx: RuntimeContext = {
   stopPresence: () => {
     stopPresence?.();
     stopPresence = undefined;
+    state.getLiveSessionPresence = undefined;
   },
 };
 registerLifecycle(ctx);
