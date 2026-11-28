@@ -1,4 +1,5 @@
 """Native sign-in follows web /login, remains cancellable, shows errors, and closes only after account success."""
+import math
 import sys
 from driver import UI
 import catalog
@@ -39,14 +40,20 @@ ui.capture('create-account')
 ui.axe('tap', '--id', 'auth-email-back')
 ui.element('auth.native.google')
 # Preview uses the production page with a deterministic service, no provider/network.
-provider_ids = ('auth.native.apple', 'auth.native.google', 'auth.native.github', 'auth.native.discord', 'auth-email-entry')
+provider_ids = providers + ('auth-email-entry',)
 resting = {i['AXUniqueId']: i['frame'] for i in ui.state() if i.get('AXUniqueId') in provider_ids}
+assert resting.keys() == set(provider_ids), ('Missing provider controls', resting)
 ui.axe('tap', '--id', 'auth.native.google')
 ui.wait(lambda items: any(item.get('AXUniqueId') == 'auth.native.google' and item.get('AXLabel') == catalog.text('auth.login.loading') for item in items), 'Provider did not show its waiting title')
 ui.capture('waiting')
 waiting = ui.state()
 assert not any(item.get('AXUniqueId') == 'auth-cancel' for item in waiting), 'Provider sign-in shows its own cancel; the page adds none'
-shifted = {i['AXUniqueId']: i['frame'] for i in waiting if i.get('AXUniqueId') in resting and i['frame'] != resting[i['AXUniqueId']]}
+waiting_frames = {i['AXUniqueId']: i['frame'] for i in waiting if i.get('AXUniqueId') in resting}
+assert waiting_frames.keys() == resting.keys(), ('Missing provider controls while waiting', waiting_frames)
+# AX may serialize the same frame with different trailing floating-point digits.
+shifted = {identifier: frame for identifier, frame in waiting_frames.items()
+           if any(not math.isclose(frame[key], value, rel_tol=0, abs_tol=1e-6)
+                  for key, value in resting[identifier].items())}
 assert not shifted, ('Provider panel moved while waiting', shifted, resting)
 ui.wait(lambda items: any(item.get('AXLabel') == catalog.text('auth.error.cancelledSignIn') for item in items), 'Missing cancellation error')
 ui.capture('error')
