@@ -112,13 +112,7 @@ final class LodyMenuButton: UIView {
     let next = WorkspaceSwitcherPanel(
       items: items, accountEmail: accountEmail, maxWidth: (window?.bounds.width ?? 375) - 32
     ) { [weak self] id in self?.selected?(id) }
-    next.modalPresentationStyle = .popover
-    if let popover = next.popoverPresentationController {
-      popover.sourceView = button
-      popover.sourceRect = button.bounds
-      popover.permittedArrowDirections = [.up, .down]
-      popover.delegate = next
-    }
+    next.configureAnchoredPresentation(from: button)
     panel = next
     presenter.present(next, animated: true)
   }
