@@ -18,6 +18,7 @@ final class PushRegistration {
   private let failure: () -> Void
   private(set) var session: Session?
   private(set) var provider: Provider?
+  private(set) var registrationEpoch = 0
   private var generation = 0
   private var tail: Task<Void, Never>?
   private var token: String?
@@ -78,6 +79,7 @@ final class PushRegistration {
           "token": token, "bundleId": bundle, "language": Locale.preferredLanguages.first ?? "en",
         ])
         guard self.current(session, epoch) else { return }
+        self.registrationEpoch += 1
         self.changed(next, true)
       } catch {
         if self.current(session, epoch) { self.failure() }
@@ -98,4 +100,52 @@ final class PushRegistration {
   }
   // Deterministic lifecycle checks await real completion, never sleeps.
   func drain() async { await tail?.value }
+}
+
+/// Coordinates direct-APNs ActivityKit token sync with installation registration.
+/// Never uploads before `pushSubscriptions:register` has committed, re-syncs when
+/// a newer registration epoch commits (healing server-side session/environment resets),
+/// and fences immediately on logout, permission revocation, or provider switches.
+@MainActor
+final class ActivityTokenSync {
+  struct Target: Equatable {
+    let session: PushRegistration.Session
+    let epoch: Int
+  }
+  enum Action: Equatable {
+    case unchanged
+    case stop
+    case start(Target)
+  }
+
+  private(set) var active: Target?
+  private var retryOnRefresh = false
+
+  func transition(
+    provider: PushRegistration.Provider?,
+    authorized: Bool,
+    registered: Bool,
+    session: PushRegistration.Session?,
+    registrationEpoch: Int
+  ) -> Action {
+    guard provider == .apns, authorized, let session else {
+      retryOnRefresh = false
+      guard active != nil else { return .unchanged }
+      active = nil
+      return .stop
+    }
+    // Wait until `pushSubscriptions:register` commits; preserve active observers
+    // while an in-flight foreground refresh is re-confirming registration.
+    guard registered else { return .unchanged }
+    let next = Target(session: session, epoch: registrationEpoch)
+    guard next != active || retryOnRefresh else { return .unchanged }
+    retryOnRefresh = false
+    active = next
+    return .start(next)
+  }
+
+  func recordUploadFailure(for target: Target) {
+    guard active == target else { return }
+    retryOnRefresh = true
+  }
 }

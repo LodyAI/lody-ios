@@ -1,4 +1,6 @@
+@preconcurrency import ActivityKit
 import OneSignalFramework
+@preconcurrency import OneSignalLiveActivities
 import UserNotifications
 import UIKit
 
@@ -12,6 +14,7 @@ final class PushNotifications: NSObject, OSNotificationClickListener, OSNotifica
   var onClickAvailable: (() -> Void)?
   var visibleRoute = ""
   private let activityTokens = ActivityPushTokens()
+  private var oneSignalActivityTasks: [String: Task<Void, Never>] = [:]
   private var registered = false
   private var sdkStarted = false
   private var sdkDelegate: (any UNUserNotificationCenterDelegate)?
@@ -27,16 +30,22 @@ final class PushNotifications: NSObject, OSNotificationClickListener, OSNotifica
   }
   private lazy var registration: PushRegistration = PushRegistration(installation: Self.installation, call: { session, kind, path, args in
     // Capture the credential once: never borrow a newly logged-in account's JWT.
-    let auth = try await GitHubCloud.request("https://backend.lody.ai/api/auth/convex/token", token: session.credential) as? [String: Any]
+    let auth = try await GitHubCloud.request("\(BackendEnvironment.site)/api/auth/convex/token", token: session.credential) as? [String: Any]
     guard let jwt = auth?["token"] as? String, !jwt.isEmpty else { throw GitHubCloud.failure() }
-    let result = try await GitHubCloud.request("https://convex.lody.ai/api/\(kind)", token: jwt,
+    let result = try await GitHubCloud.request("\(BackendEnvironment.convex)/api/\(kind)", token: jwt,
       body: ["path": path, "format": "convex_encoded_json", "args": [args]]) as? [String: Any]
     guard result?["status"] as? String == "success", let value = result?["value"] else { throw GitHubCloud.failure() }
     return try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed)
   }, changed: { [weak self] provider, registered in
     guard let self else { return }
     let previous = self.selectedProvider
-    self.activityTokens.configure(provider == .apns && self.registration.authorized ? self.registration.session : nil)
+    self.activityTokens.reconcile(
+      provider: provider,
+      authorized: self.registration.authorized,
+      registered: registered,
+      session: self.registration.session,
+      registrationEpoch: self.registration.registrationEpoch
+    )
     self.selectedProvider = provider
     self.configured = provider != nil
     self.registered = registered
@@ -46,11 +55,19 @@ final class PushNotifications: NSObject, OSNotificationClickListener, OSNotifica
       if let delegate = self.sdkDelegate { UNUserNotificationCenter.current().delegate = delegate }
       if self.sdkStarted, let user = self.userId {
         OneSignal.login(user)
-        if self.registration.authorized { OneSignal.User.pushSubscription.optIn() }
-        else { OneSignal.User.pushSubscription.optOut() }
+        if self.registration.authorized {
+          OneSignal.User.pushSubscription.optIn()
+          self.syncExistingActivitiesWithOneSignal(userId: user)
+        } else {
+          self.cancelOneSignalActivitySync()
+          OneSignal.User.pushSubscription.optOut()
+        }
         self.evaluateSubscription(OneSignal.User.pushSubscription.id)
+      } else {
+        self.cancelOneSignalActivitySync()
       }
     } else {
+      self.cancelOneSignalActivitySync()
       if self.sdkStarted {
         OneSignal.User.pushSubscription.optOut()
         OneSignal.logout()
@@ -94,6 +111,35 @@ final class PushNotifications: NSObject, OSNotificationClickListener, OSNotifica
     OneSignal.Notifications.addClickListener(self)
     OneSignal.Notifications.addForegroundLifecycleListener(self)
     sdkDelegate = UNUserNotificationCenter.current().delegate
+  }
+
+  /// Because OneSignal initializes lazily after `pushSubscriptions:configuration`,
+  /// a Live Activity may already have started before `OneSignal.LiveActivities.setup`.
+  /// Register existing activities' push tokens directly so remote updates still land.
+  private func syncExistingActivitiesWithOneSignal(userId: String) {
+    guard ConversationActivities.supported else { return }
+    let currentEpoch = identityEpoch
+    for activity in Activity<LodyConversationLiveActivityAttributes>.activities {
+      let attributes = activity.attributes
+      guard attributes.activityId == "lody-conversations:v5:\(attributes.workspaceId):\(userId)" else { continue }
+      if let token = activity.pushToken {
+        OneSignal.LiveActivities.enter(attributes.activityId, withToken: token.map { String(format: "%02x", $0) }.joined())
+      }
+      guard oneSignalActivityTasks[activity.id] == nil else { continue }
+      oneSignalActivityTasks[activity.id] = Task { [weak self] in
+        for await token in activity.pushTokenUpdates {
+          guard !Task.isCancelled, let self, self.identityEpoch == currentEpoch,
+                self.registration.provider == .oneSignal, self.registration.authorized else { return }
+          OneSignal.LiveActivities.enter(attributes.activityId, withToken: token.map { String(format: "%02x", $0) }.joined())
+        }
+        if !Task.isCancelled { self?.oneSignalActivityTasks.removeValue(forKey: activity.id) }
+      }
+    }
+  }
+
+  private func cancelOneSignalActivitySync() {
+    oneSignalActivityTasks.values.forEach { $0.cancel() }
+    oneSignalActivityTasks.removeAll()
   }
 
   nonisolated func onPushSubscriptionDidChange(state: OSPushSubscriptionChangedState) {
