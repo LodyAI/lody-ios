@@ -133,7 +133,7 @@ def held_pop():
         while not signal.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(.05)
         assert signal.exists(), 'No held interactive transition was observed'
-        subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(ui.output / 'header-held.png')], check=True, timeout=10)
+        subprocess.run(['xcrun', 'simctl', 'io', udid, 'screenshot', str(ui.output / 'header-held.png')], check=True, timeout=20)
         assert process.wait(timeout=25) == 0
     finally:
         if process.poll() is None:
