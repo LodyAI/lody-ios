@@ -28,7 +28,7 @@ COMPOSER = ['Chrome/LodyGlass.swift', 'Chrome/LodyScrollEdges.swift', 'Chrome/Lo
 checks = {
     'session-subscriptions': ['Cloud/SessionSubscriptions.swift'],
     'home-layout': ['Chrome/LodyHomeLayout.swift'],
-    'fold-host': ['Chrome/LodyFoldHost.swift'],
+    'fold-host': ['Chrome/LodyFoldHost.swift', 'Chrome/LodyVerticalBarRail.swift'],
     'session-feed': ['Sessions/SessionFeed.swift', 'Sessions/SessionEnvelope.swift', 'Sessions/SessionPermission.swift'],
     'session-simulator': ['Sessions/SessionSimulator.swift'],
     'preview-feedback': ['Outbox/OutboxRecord.swift', 'Outbox/OutboxStore.swift', 'HTMLPreview/PreviewFeedback.swift'],
