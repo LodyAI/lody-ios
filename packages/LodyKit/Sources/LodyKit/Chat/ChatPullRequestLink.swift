@@ -12,10 +12,32 @@ struct ChatPullRequestLink: Equatable {
     guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
       let host = url.host?.lowercased(), host == "github.com" || host == "www.github.com" else { return nil }
     let parts = url.path.split(separator: "/").map(String.init)
-    guard parts.count >= 4, parts[2] == "pull", !parts[3].isEmpty,
-      parts[3].allSatisfy({ $0.isASCII && $0.isNumber }), let number = Int(parts[3]), number > 0 else { return nil }
+    guard parts.count >= 4, parts[2] == "pull",
+      ![".", ".."].contains(parts[0]), ![".", ".."].contains(parts[1]),
+      !parts[3].isEmpty, parts[3].allSatisfy({ $0.isASCII && $0.isNumber }),
+      let number = Int(parts[3]), number > 0 else { return nil }
     repository = "\(parts[0])/\(parts[1])"
     self.number = number
     self.url = "https://github.com/\(repository)/pull/\(number)"
+  }
+
+  /// Resolve the PR target for the native PR page, reusing the session's catalog entry or project
+  /// spelling when present while keeping any other repository's owner/repo and number intact.
+  func resolved(known: [SessionPullRequest], projectRepositories: [String]) -> SessionPullRequest {
+    let canonicalRepository = projectRepositories.first {
+      $0.caseInsensitiveCompare(repository) == .orderedSame
+    } ?? repository
+    if let match = known.last(where: {
+      $0.number == number && $0.repository.caseInsensitiveCompare(canonicalRepository) == .orderedSame
+    }) {
+      return match
+    }
+    return SessionPullRequest(
+      repository: canonicalRepository,
+      number: number,
+      status: "",
+      ci: nil,
+      url: "https://github.com/\(canonicalRepository)/pull/\(number)"
+    )
   }
 }
