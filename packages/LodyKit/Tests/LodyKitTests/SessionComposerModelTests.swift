@@ -291,6 +291,155 @@ final class SessionComposerModelTests: XCTestCase {
     window.isHidden = true
   }
 
+  private func descendantScrollViews(in root: UIView) -> [UIScrollView] {
+    Self.descendantScrollViews(in: root)
+  }
+
+  private func roleItem(_ id: String, _ name: String) -> RuntimeContract.AgentRoleItem {
+    RuntimeContract.AgentRoleItem(
+      id: id,
+      ownerUserId: "u1",
+      visibility: .workspace,
+      name: name,
+      description: "",
+      promptPrefix: "",
+      emoji: "🧪",
+      revision: 1,
+      updatedAt: 1,
+      targets: [
+        RuntimeContract.AgentRoleItemTargetsItem(
+          machineId: "m1",
+          agentConfigId: "a1",
+          runConfig: .init(modelId: "gpt"),
+          machineName: "Mac",
+          agentName: "Codex",
+          state: .configured
+        ),
+      ]
+    )
+  }
+
+  func testCreateSessionRestoresCachedRolesAndRetriesFailedRoleReadWithoutHidingSend() async {
+    UIView.setAnimationsEnabled(false)
+    defer { UIView.setAnimationsEnabled(true) }
+
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+    let input = LodyComposerView(frame: .zero)
+    let controller = CreateSessionController(composer: input.composer, host: input)
+    controller.form = CreateSessionForm(
+      userId: "u1",
+      workspaceId: "w1",
+      projects: [],
+      machineNames: ["m1": "Mac"],
+      machineOs: ["m1": "darwin"]
+    )
+    controller.form.open(projectId: nil, context: "chat")
+
+    let cachedRole = roleItem("r-cached", "Cached Reviewer")
+    let liveRole = roleItem("r-live", "Live Reviewer")
+    var roleAttempts = 0
+    var roleReplies: [Result<[RuntimeContract.AgentRoleItem], Error>] = [
+      .failure(Unready()),
+      .success([liveRole]),
+      .failure(Unready()),
+    ]
+    var presentedSheet: CreateRunConfigSheetController?
+    controller.presentSheet = { viewController, _ in
+      guard let sheet = viewController as? CreateRunConfigSheetController else { return }
+      presentedSheet = sheet
+    }
+    controller.loadCachedOptions = { [complete] in complete }
+    controller.loadOptions = { [complete] in complete }
+    controller.loadCachedRoles = { [cachedRole] in [cachedRole] }
+    controller.loadRoles = {
+      roleAttempts += 1
+      return try roleReplies.removeFirst().get()
+    }
+
+    window.rootViewController = UINavigationController(rootViewController: controller)
+    window.makeKeyAndVisible()
+    controller.loadViewIfNeeded()
+    window.layoutIfNeeded()
+    await controller.rolesTask?.value
+
+    let noneLabel = String(localized: "create.role.none", bundle: .lody)
+    // First live read failed while runtime started: cached Role row still renders immediately.
+    XCTAssertFalse(controller.rolesLoaded)
+    XCTAssertEqual(roleAttempts, 1)
+    input.composer.onRunConfig?()
+    guard let sheet = presentedSheet else {
+      return XCTFail("Expected CreateRunConfigSheetController to present with cached Role row")
+    }
+    XCTAssertEqual(sheet.state.runConfig.map(\.id), ["role", "agent", "model"])
+    XCTAssertEqual(sheet.state.runConfig.first?.options.map(\.title), [noneLabel, "Cached Reviewer"])
+
+    // Runtime turns live: retrying loadAgentRoles replaces cached rows with live rows in the open sheet.
+    controller.loadAgentRoles()
+    await controller.rolesTask?.value
+    XCTAssertTrue(controller.rolesLoaded)
+    XCTAssertEqual(roleAttempts, 2)
+    XCTAssertEqual(sheet.state.runConfig.first?.options.map(\.title), [noneLabel, "Live Reviewer"])
+
+    // A later transient failure on `agentRolesChanged` keeps the last loaded Role list.
+    controller.loadAgentRoles()
+    await controller.rolesTask?.value
+    XCTAssertEqual(roleAttempts, 3)
+    XCTAssertEqual(sheet.state.runConfig.first?.options.map(\.title), [noneLabel, "Live Reviewer"])
+
+    sheet.dismissCleanly(animated: false)
+    window.isHidden = true
+  }
+
+  func testSessionComposerRetriesUnloadedRolesOnOptionsAndRolesEventsAndKeepsLoadedList() async {
+    let noneLabel = String(localized: "create.role.none", bundle: .lody)
+    let options = Options()
+    options.replies = [.success(complete), .success(complete)]
+    let cachedRole = roleItem("r-cached", "Cached Reviewer")
+    let liveRole = roleItem("r-live", "Live Reviewer")
+    var roleReads = 0
+    var roleReplies: [Result<[RuntimeContract.AgentRoleItem], Error>] = [
+      .failure(Unready()),
+      .success([liveRole]),
+      .failure(Unready()),
+    ]
+    let composer = SessionComposerModel(choice: nil, service: SessionComposerService(
+      options: { _, _ in
+        options.reads += 1
+        return try options.replies.removeFirst().get()
+      },
+      tier: { _, _ in nil },
+      cachedRoles: { _ in [cachedRole] },
+      roles: { _ in
+        roleReads += 1
+        return try roleReplies.removeFirst().get()
+      }
+    ))
+
+    await settle(composer) { composer.load(workspaceId: "w1", projectId: nil, session: session) }
+    await composer.rolesTask?.value
+    XCTAssertEqual(roleReads, 1)
+    XCTAssertEqual(composer.runConfig.first?.id, "role", "Cached Roles keep the Role row visible while live read is unready")
+    XCTAssertEqual(composer.runConfig.first?.options.map(\.title), [noneLabel, "Cached Reviewer"])
+
+    // Ordinary renders do not loop failed Role reads; `optionsChanged` (runtime live) retries an unloaded Role list
+    // even when capability/agent options were already complete.
+    composer.load(workspaceId: "w1", projectId: nil, session: session)
+    XCTAssertEqual(roleReads, 1)
+    composer.optionsChanged()
+    await composer.rolesTask?.value
+    XCTAssertEqual(roleReads, 2)
+    XCTAssertEqual(composer.runConfig.first?.options.map(\.title), [noneLabel, "Live Reviewer"])
+
+    // Once loaded, `optionsChanged` stops re-reading Roles, while `rolesChanged` refreshes and retains on failure.
+    composer.optionsChanged()
+    await composer.rolesTask?.value
+    XCTAssertEqual(roleReads, 2)
+    composer.rolesChanged()
+    await composer.rolesTask?.value
+    XCTAssertEqual(roleReads, 3)
+    XCTAssertEqual(composer.runConfig.first?.options.map(\.title), [noneLabel, "Live Reviewer"])
+  }
+
   private static func descendantScrollViews(in root: UIView) -> [UIScrollView] {
     var result: [UIScrollView] = []
     if let scroll = root as? UIScrollView { result.append(scroll) }

@@ -633,7 +633,39 @@ test('agentRoles handler ignores unhealthy machine streams, reuses synced worksp
     discovered.roles.find((r) => r.id === 'reviewer').name,
     'Renamed Reviewer',
   );
-  // Meta unhealthy must still reject agentRoles.
+  // An active error-free meta catch-up resolves before agentRoles list checks replicaScope.
+  let finishCatchUp;
+  const catchingUp = new Map([
+    [
+      'meta',
+      new Promise((resolve) => {
+        finishCatchUp = resolve;
+      }),
+    ],
+  ]);
+  state.catchingUp = catchingUp;
+  state.workspaceReplica = {
+    flock: workspaceFlock,
+    synced: true,
+    missing: false,
+  };
+  unhealthy.add('meta');
+  const pendingList = agentRoles({
+    workspaceId: 'w',
+    userId: 'me',
+    action: 'list',
+  });
+  setTimeout(() => {
+    unhealthy.delete('meta');
+    catchingUp.delete('meta');
+    finishCatchUp();
+  }, 10);
+  const afterCatchUp = await pendingList;
+  assert.equal(
+    afterCatchUp.roles.find((r) => r.id === 'reviewer').name,
+    'Renamed Reviewer',
+  );
+  // Meta unhealthy without an active catch-up must still reject agentRoles immediately.
   unhealthy.add('meta');
   await assert.rejects(
     agentRoles({ workspaceId: 'w', userId: 'me', action: 'list' }),

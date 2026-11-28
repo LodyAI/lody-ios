@@ -194,6 +194,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       }
     }
     observers.append(observeCreationOptions())
+    observers.append(observeAgentRoles())
     render()
   }
 

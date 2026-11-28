@@ -53,6 +53,7 @@ class CreateSessionHostController: UIViewController, LodyPageOwnedHeader {
   private var opening = false
   private let optionsObservers = NotificationObservers()
   private var optionsRefresh: Task<Void, Never>?
+  private var rolesRefresh: Task<Void, Never>?
   private var capabilityTask: Task<Void, Never>?
   private var capabilityConfig: String?
   /// Set once the Outbox holds the typed turn, so a composer that keeps its text visible while
@@ -97,13 +98,29 @@ class CreateSessionHostController: UIViewController, LodyPageOwnedHeader {
         MainActor.assumeIsolated {
           guard let self, DataRuntime.current?.workspace == self.params.workspaceId else { return }
           // A read that failed before the runtime was ready (or while it was offline) is read
-          // again once it is live, so the page does not stay on "Tap to retry".
-          guard optionsChanged || self.controller.optionsFailed else { return }
+          // again once it is live, so neither creation options nor the Role row stay missing.
+          let needsOptions = optionsChanged || self.controller.optionsFailed
+          let needsRoles = optionsChanged || !self.controller.rolesLoaded
+          guard needsOptions || needsRoles else { return }
           self.optionsRefresh?.cancel()
           self.optionsRefresh = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
             guard let self, self.controller.isViewLoaded, self.view.window != nil else { return }
-            self.controller.load(background: true)
+            if needsOptions { self.controller.load(background: true) }
+            if optionsChanged || !self.controller.rolesLoaded { self.controller.loadAgentRoles() }
+          }
+        }
+      })
+      let expectedScope = "\(params.userId):\(params.workspaceId)"
+      optionsObservers.add(NotificationCenter.default.addObserver(forName: .lodyRolesChanged, object: nil, queue: .main) { [weak self] note in
+        guard note.userInfo?["scopeKey"] as? String == expectedScope else { return }
+        MainActor.assumeIsolated {
+          guard let self, DataRuntime.current?.workspace == self.params.workspaceId else { return }
+          self.rolesRefresh?.cancel()
+          self.rolesRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            guard let self, self.controller.isViewLoaded, self.view.window != nil else { return }
+            self.controller.loadAgentRoles()
           }
         }
       })
@@ -169,6 +186,10 @@ class CreateSessionHostController: UIViewController, LodyPageOwnedHeader {
       let options = try await service.options(workspaceId, nil)
       if service.persistShare { try? ShareStore.writeOptions(options, target: CreateLogic.chatTarget) }
       return options
+    }
+    controller.loadCachedRoles = { [weak self] in
+      guard let self else { return nil }
+      return await service.cachedRoles(params.userId, workspaceId)
     }
     controller.loadRoles = { [weak self] in
       guard let self else { throw CancellationError() }
