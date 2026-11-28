@@ -84,6 +84,8 @@ checks = {
     'attachments': ['LodyLocalization.swift', 'Diagnostics/DiagnosticsStore.swift', 'Cloud/SessionAttachments.swift', 'Auth/WorkspaceModePins.swift'],
     'inline-diff': ['UIFont+Dynamic.swift', 'Diff/InlineDiffModel.swift', 'Diff/InlineDiffRenderer.swift', 'Diff/DiffDocumentModel.swift', 'Diff/DiffDocumentLayout.swift'],
     'list': [
+        'Chrome/LodyGlass.swift',
+        'Chrome/LodyAnimate.swift',
         'Chrome/LodyMenuButtonStyle.swift',
         'Chrome/LodyMenuButton.swift',
         'Chrome/WorkspaceSwitcherPanel.swift',

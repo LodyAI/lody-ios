@@ -168,12 +168,16 @@ precise openers never fall back to provenance-only root IDs. Archived and side-p
 sessions are excluded; closed Tabs appear only when current. The tree does not
 change archive ownership or read additional transcripts.
 
-The workspace switcher is `Chrome/WorkspaceSwitcherPanel`, a popover anchored to
-the capsule that never adapts into a sheet. A `UIMenu` wraps long titles onto
+The workspace switcher is `Chrome/WorkspaceSwitcherPanel`, an arrowless floating
+Liquid Glass menu panel anchored to the capsule that never adapts into a sheet
+(so all four corners keep the same radius without UIKit's popover arrow clamping).
+A `UIMenu` wraps long titles onto
 several lines and offers no fade, so the panel draws its own menu-style rows:
-leading checkmark, circular avatar, and the name on one line that fades out at the
-trailing edge (`LodyFadingLabel`, mirrored for right-to-left) instead of wrapping or
-showing an ellipsis. Rows keep full names and the selected trait for VoiceOver; up
+circular avatar leading directly inside a concentric selection pill (using
+`fillSelected` and a semibold title for the active workspace, without a
+checkmark gutter), and the name on one line that fades out at the trailing edge
+(`LodyFadingLabel`, mirrored for right-to-left) instead of wrapping or showing
+an ellipsis. Rows keep full names and the selected trait for VoiceOver; up
 to eight rows show before the list scrolls, and the width stays between 200 and
 260 pt within the window. Selecting the current workspace is a no-op; catalog
 changes refresh the open panel. The account email heads the panel, projected
