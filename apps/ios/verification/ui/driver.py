@@ -121,6 +121,11 @@ class UI:
         finally:
             self.axe('touch', *point, '--up')
 
+    def tap_frame(self, frame, post_delay='.2'):
+        x = frame['x'] + frame['width'] / 2
+        y = frame['y'] + frame['height'] / 2
+        self.axe('tap', '-x', str(x), '-y', str(y), '--post-delay', post_delay)
+
     def restore_software_keyboard(self):
         """Undo AXe composite typing's simulated hardware-keyboard attachment.
 
