@@ -68,8 +68,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   var optionsRefresh: Task<Void, Never>?
   var connectingShown = false
   var connectingTask: Task<Void, Never>?
-  /// The open run-config sheet's rows, refreshed when the computer's options arrive.
-  weak var runConfigPanel: CreatePanelState?
+  /// The open run-config sheet, refreshed when the computer's options arrive.
+  weak var runConfigSheet: CreateRunConfigSheetController?
   private let initialChoice: ModelChoice?
   private var observers: [NSObjectProtocol] = []
   private var findToken = 0
@@ -491,7 +491,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
 
   /// Built on demand when the More button opens (uncached), so background catalog/status
   /// renders never replace an open `UIMenu` and cause UIKit to reload/flash it.
-  private func moreMenuElements() -> [UIMenuElement] {
+  func moreMenuElements() -> [UIMenuElement] {
     if isDraftTab {
       guard !closedDirectoryTabs.isEmpty else { return [] }
       return [UIAction(title: String(localized: "session.tabs.closed", bundle: .lody), image: UIImage(systemName: "clock.arrow.circlepath")) { [weak self] _ in
@@ -539,6 +539,9 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     children.append(UIAction(title: String(localized: "session.action.share", bundle: .lody), image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
       self?.perform("share")
     })
+    if let status = statusMenu(session) {
+      children.append(status)
+    }
     if canManage {
       children.append(UIAction(
         title: String(localized: String.LocalizationValue(session.archived ? "session.action.unarchive" : "session.action.archive"), bundle: .lody),

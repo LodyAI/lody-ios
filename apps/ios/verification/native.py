@@ -39,7 +39,9 @@ checks = {
     'simulator-transport': ['LodyLocalization.swift', 'SimulatorStream/SimulatorDeviceView.swift', 'SimulatorStream/SimulatorRemote.swift', 'SimulatorStream/SimulatorRTCFrame.swift', 'SimulatorStream/SimulatorRTC.swift', 'SimulatorStream/SimulatorTransport.swift'],
     'chat-kit': [],
     'chat-snapshot-reentrancy': [],
+    'home-create': [],
     'session-composer': [],
+    'session-more-menu': [],
     'lexical-swift': [],
     'scroll-edges': ['Chrome/LodyScrollEdges.swift', 'LodyTint.swift', 'Chrome/LodyEdgeFade.swift'],
     'glass-transition': [],
@@ -82,6 +84,8 @@ checks = {
     'attachments': ['LodyLocalization.swift', 'Diagnostics/DiagnosticsStore.swift', 'Cloud/SessionAttachments.swift', 'Auth/WorkspaceModePins.swift'],
     'inline-diff': ['UIFont+Dynamic.swift', 'Diff/InlineDiffModel.swift', 'Diff/InlineDiffRenderer.swift', 'Diff/DiffDocumentModel.swift', 'Diff/DiffDocumentLayout.swift'],
     'list': [
+        'Chrome/LodyGlass.swift',
+        'Chrome/LodyAnimate.swift',
         'Chrome/LodyMenuButtonStyle.swift',
         'Chrome/LodyMenuButton.swift',
         'Chrome/WorkspaceSwitcherPanel.swift',
@@ -111,7 +115,7 @@ checks = {
     'chat-title': ['Chrome/LodyGlass.swift', 'LodyLocalization.swift', 'LodyUIVerify.swift', 'LodyTint.swift', 'Chrome/LodyNavigationHeader.swift', 'Chrome/LodyNavigationSearch.swift', 'Chat/ChatNavigationTitle.swift'],
     'page-progress': ['List/LodyPageProgress.swift'],
     'create-session': ['LodyLocalization.swift', 'CreateSession/CreateSessionForm.swift'],
-    'session-info-bar': ['LodyLocalization.swift', 'Sessions/SessionCatalog.swift', 'Sessions/SessionInfoBar.swift', 'Sessions/SessionArchive.swift'],
+    'session-info-bar': ['LodyLocalization.swift', 'Sessions/SessionCatalog.swift', 'Sessions/SessionInfoBar.swift', 'Sessions/SessionArchive.swift', 'Chat/ChatPullRequestLink.swift'],
     'session-roles': ['LodyLocalization.swift', 'CreateSession/CreateSessionForm.swift', 'Sessions/SessionRoles.swift'],
     'unified-patch': ['Diff/UnifiedPatch.swift'],
     'create-draft': ['LodyLocalization.swift', 'CreateSession/CreateSessionForm.swift', 'Outbox/OutboxRecord.swift', 'CreateSession/CreateDraftRecord.swift'],
@@ -194,8 +198,13 @@ with tempfile.TemporaryDirectory(prefix='lody-native-verify-') as output:
         return lexical_dir
 
     for name, files in checks.items():
-        if name in ['chat-snapshot-reentrancy', 'session-composer']:
-            suite = {'chat-snapshot-reentrancy': 'ChatSnapshotReentrancyTests', 'session-composer': 'SessionComposerModelTests'}[name]
+        if name in ['chat-snapshot-reentrancy', 'home-create', 'session-composer', 'session-more-menu']:
+            suite = {
+                'chat-snapshot-reentrancy': 'ChatSnapshotReentrancyTests',
+                'home-create': 'HomeCreateButtonTests',
+                'session-composer': 'SessionComposerModelTests',
+                'session-more-menu': 'SessionMoreMenuTests',
+            }[name]
             subprocess.run(['xcodebuild', 'test', '-scheme', 'LodyKit', '-destination', f'id={args.udid}',
                 '-derivedDataPath', str(root / '.artifacts/native-lody-kit'), '-collect-test-diagnostics', 'never',
                 f'-only-testing:LodyKitTests/{suite}'],

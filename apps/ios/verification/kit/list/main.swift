@@ -692,13 +692,45 @@ assert(fades.first { $0.text == "Other" }?.layer.mask == nil, "A short workspace
 let rows = switcherViews(switcher.view, UIControl.self).filter { $0.accessibilityIdentifier?.hasPrefix("workspace-row:") == true }
 assert(rows.map(\.accessibilityLabel) == [longWorkspace, "Other"], "Rows keep full names for VoiceOver")
 assert(rows[0].accessibilityTraits.contains(.selected) && !rows[1].accessibilityTraits.contains(.selected), "VoiceOver reads the current workspace as selected")
+let currentPill = switcherViews(rows[0], UIView.self).first { $0.accessibilityIdentifier == "workspace-row-pill:current" }
+let otherPill = switcherViews(rows[1], UIView.self).first { $0.accessibilityIdentifier == "workspace-row-pill:other" }
+assert(currentPill?.backgroundColor != nil && currentPill?.backgroundColor != .clear, "Selected workspace row shows a concentric selection pill")
+assert(otherPill?.backgroundColor == .clear, "Unselected workspace rows stay clear at rest")
 switcher.update(items: [LodyMenuItem(id: "other", title: "Renamed", selected: true, encrypted: true, retrySelection: true)], accountEmail: "")
 switcher.view.layoutIfNeeded()
 assert(!switcherViews(switcher.view, UILabel.self).contains { $0.text == "preview@example.test" }, "Clearing account identity removes the heading")
 assert(switcherViews(switcher.view, LodyFadingLabel.self).map(\.text) == ["Renamed"], "Catalog changes refresh the panel")
 assert(switcherViews(switcher.view, UIImageView.self).contains { $0.accessibilityIdentifier == "workspace-encrypted:other" && !$0.isHidden }, "Encrypted workspaces remain listed with a visible lock")
 assert(switcherViews(switcher.view, UIControl.self).contains { $0.accessibilityLabel == "Renamed, E2EE" }, "VoiceOver announces encryption")
-print("PASS: the workspace switcher keeps names on one line with a trailing fade, full VoiceOver names and selection")
+let switcherGlass = switcherViews(switcher.view, UIVisualEffectView.self).first
+assert(switcherGlass != nil, "Workspace switcher renders inside a glass card")
+switcher.configureAnchoredPresentation(from: capsuleButton)
+assert(switcher.modalPresentationStyle == .custom && switcher.transitioningDelegate != nil, "Anchored presentation replaces arrowed UIPopover")
+let ltrBelow = WorkspaceSwitcherPanel.panelFrame(
+  in: CGRect(x: 0, y: 0, width: 393, height: 852),
+  preferredSize: CGSize(width: 260, height: 320),
+  anchorRect: CGRect(x: 16, y: 62, width: 120, height: 44),
+  safeArea: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+  rtl: false
+)
+assert(ltrBelow.opensDownward && ltrBelow.frame == CGRect(x: 16, y: 114, width: 260, height: 320), "Panel aligns to the capsule leading edge below the header")
+let rtlBelow = WorkspaceSwitcherPanel.panelFrame(
+  in: CGRect(x: 0, y: 0, width: 393, height: 852),
+  preferredSize: CGSize(width: 260, height: 320),
+  anchorRect: CGRect(x: 257, y: 62, width: 120, height: 44),
+  safeArea: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+  rtl: true
+)
+assert(rtlBelow.opensDownward && rtlBelow.frame == CGRect(x: 117, y: 114, width: 260, height: 320), "RTL panel aligns to the capsule trailing edge")
+let flippedAbove = WorkspaceSwitcherPanel.panelFrame(
+  in: CGRect(x: 0, y: 0, width: 393, height: 852),
+  preferredSize: CGSize(width: 260, height: 320),
+  anchorRect: CGRect(x: 16, y: 740, width: 120, height: 44),
+  safeArea: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+  rtl: false
+)
+assert(!flippedAbove.opensDownward && flippedAbove.frame.maxY == 732 && flippedAbove.frame.height == 320, "Panel flips above the anchor when bottom space is insufficient")
+print("PASS: the workspace switcher keeps names on one line with a trailing fade, full VoiceOver names, anchored Liquid Glass layout and selection")
 
 // Chat renders this shared cached photo at 36 pt. A 3x display needs 108 real pixels.
 let retinaFormat = UIGraphicsImageRendererFormat()
