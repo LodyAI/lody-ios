@@ -60,6 +60,65 @@ final class ChatSnapshotReentrancyTests: XCTestCase {
     XCTAssertFalse(actual.contains("first"))
   }
 
+  func testCompactSheetAndProcessBackgroundFollowSystemGlassSupport() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let spec = ShellPageSpec(
+      title: "Activity", style: "formSheet", animation: "none",
+      dismissible: true, headerShown: true, headerVariant: "transparent"
+    )
+    let page = LodyPageController(spec: spec, inSheet: true, content: UIViewController())
+    let navigation = UINavigationController(rootViewController: page)
+    navigation.modalPresentationStyle = .formSheet
+    window.rootViewController = navigation
+    window.makeKeyAndVisible()
+    page.loadViewIfNeeded()
+    page.beginAppearanceTransition(true, animated: false)
+    page.endAppearanceTransition()
+
+    let chat = LodyChatView(frame: window.bounds)
+    window.addSubview(chat)
+    chat.setProcessEntryID("entry-1")
+
+    let lightTraits = UITraitCollection(userInterfaceStyle: .light)
+    let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
+
+    if #available(iOS 26.0, *) {
+      XCTAssertEqual(page.view.backgroundColor, .clear)
+      XCTAssertNil(page.navigationItem.standardAppearance?.backgroundEffect)
+      XCTAssertEqual(chat.backgroundColor, .clear)
+    } else {
+      for traits in [lightTraits, darkTraits] {
+        var pageAlpha: CGFloat = 0
+        page.view.backgroundColor?.resolvedColor(with: traits).getRed(nil, green: nil, blue: nil, alpha: &pageAlpha)
+        XCTAssertGreaterThan(pageAlpha, 0.99)
+      }
+      XCTAssertNil(page.navigationItem.scrollEdgeAppearance?.backgroundEffect)
+      XCTAssertNotNil(page.navigationItem.standardAppearance?.backgroundEffect)
+
+      XCTAssertEqual(
+        chat.backgroundColor?.resolvedColor(with: lightTraits),
+        UIColor.lodyBackground.resolvedColor(with: lightTraits)
+      )
+      XCTAssertEqual(
+        chat.backgroundColor?.resolvedColor(with: darkTraits),
+        UIColor.lodyBackground.resolvedColor(with: darkTraits)
+      )
+    }
+
+    let overlaySpec = ShellPageSpec(
+      title: "Overlay", style: "overFullScreen", animation: "none",
+      dismissible: true, headerShown: false, headerVariant: "transparent"
+    )
+    let overlay = LodyPageController(spec: overlaySpec, inSheet: true, content: UIViewController())
+    let overlayNav = UINavigationController(rootViewController: overlay)
+    overlayNav.modalPresentationStyle = .overFullScreen
+    window.rootViewController = overlayNav
+    overlay.loadViewIfNeeded()
+    overlay.beginAppearanceTransition(true, animated: false)
+    overlay.endAppearanceTransition()
+    XCTAssertEqual(overlay.view.backgroundColor, .clear)
+  }
+
   private func entries(_ text: String) throws -> [ChatEntry] {
     let json = """
     [{"id":"message","role":"user","status":"completed","finished":true,
