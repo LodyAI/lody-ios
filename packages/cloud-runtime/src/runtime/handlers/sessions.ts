@@ -91,15 +91,26 @@ export function registerSessions(
         !meta ||
         meta.isArchived ||
         !meta.machineId ||
-        (meta.historyBackend && meta.historyBackend !== 'loro')
+        (meta.historyBackend &&
+          meta.historyBackend !== 'loro' &&
+          meta.historyBackend !== 'roost')
       )
         throw new Error('session_not_ready');
-      if (
-        meta.lastMissingHistoryUserMsgId === inputId ||
-        meta.missingHistoryUserMsgIds?.[inputId] === true
-      )
-        throw new Error('input_already_terminal');
-      return { userId, machineId: meta.machineId };
+      return {
+        userId,
+        machineId: meta.machineId,
+        latestUserMsgId:
+          typeof meta.latestUserMsgId === 'string'
+            ? meta.latestUserMsgId
+            : undefined,
+        missingHistory:
+          meta.lastMissingHistoryUserMsgId === inputId ||
+          meta.missingHistoryUserMsgIds?.[inputId] === true,
+        historyBackend:
+          meta.historyBackend === 'roost'
+            ? ('roost' as const)
+            : ('loro' as const),
+      };
     });
   });
   channel.handle('forkSession', async (args) => {
@@ -566,11 +577,19 @@ export function registerSessions(
       cliType: args.cliType,
       agentType: args.agentType,
     };
+    const wireText = typeof wire.text === 'string' ? wire.text : '';
+    const expands =
+      wireText.includes('$') ||
+      wireText.includes('@session:') ||
+      wireText.includes('@role:') ||
+      wireText.includes('/shortcut:');
+    // Keep internal JS send budget strictly below the host Bridge timeout (90s / 120s).
+    const sendSignal = AbortSignal.timeout(expands ? 105_000 : 75_000);
     const access = shortcutAccess(
       sourceWorkspace,
       state.userId,
       scopedWorkspaceGrant(ctx, sourceWorkspace, state.userId),
-      AbortSignal.timeout(30000),
+      AbortSignal.any([sendSignal, AbortSignal.timeout(30000)]),
     );
     const scoped = () => {
       if (state.workspace !== sourceWorkspace || state.userId !== args.userId)
@@ -599,7 +618,10 @@ export function registerSessions(
           sourceWorkspace,
           scopedWorkspaceGrant(ctx, sourceWorkspace, state.userId),
           persisted,
-          AbortSignal.timeout(state.workspaceReplica ? 8000 : 30000),
+          AbortSignal.any([
+            sendSignal,
+            AbortSignal.timeout(state.workspaceReplica ? 8000 : 15000),
+          ]),
           () =>
             state.workspace === sourceWorkspace
               ? state.workspaceReplica
@@ -608,6 +630,7 @@ export function registerSessions(
         scoped();
         return ids;
       },
+      sendSignal,
     );
   });
 }

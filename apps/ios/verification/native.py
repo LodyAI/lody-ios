@@ -139,6 +139,8 @@ for files in checks.values():
         files.extend(['Projects/RepositoryIcon.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift'])
         files.append('Chat/ChatShortcutInsertion.swift')
     if 'Chat/ChatTranscript.swift' in files:
+        if 'Chat/ChatMessageQuote.swift' not in files:
+            files.append('Chat/ChatMessageQuote.swift')
         files.append('Chat/ChatPendingSend.swift')
         files.append('Chat/ChatTurnMetadata.swift')
     if 'Chat/ChatSendHandoff.swift' in files or 'Chat/ChatMentionPanel.swift' in files:

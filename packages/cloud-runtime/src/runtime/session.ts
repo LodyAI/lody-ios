@@ -102,6 +102,16 @@ export const MAX_BACKGROUND_SESSION_SYNCS = 3;
  * It leaves the host's sendTurn deadline room for the queue write itself.
  */
 export const QUEUED_SEND_BUDGET_MS = runtimeCalls.sendTurn.timeoutMs - 15_000;
+const DISPATCH_RPC_TIMEOUT_MS = 8_000;
+const RECOVER_SYNC_TIMEOUT_MS = 40_000;
+const RECOVER_RPC_TIMEOUT_MS = 10_000;
+export type PendingInputRecoveryTarget = {
+  userId: string;
+  machineId: string;
+  latestUserMsgId?: string;
+  missingHistory?: boolean;
+  historyBackend?: 'loro' | 'roost';
+};
 type SessionState = {
   id: string;
   workspace: string;
@@ -132,6 +142,13 @@ type SessionState = {
   sending: boolean;
   working?: boolean;
   sendingId?: string;
+  /** Input ids whose append started and ended with an ambiguous outcome; cleared once reconciled. */
+  uncertainIds: Set<string>;
+  /** Last server-confirmed stream position for incremental recovery reads. */
+  syncedOffset?: string;
+  syncedCursor?: string;
+  /** Set if a non-staged local mutation failed to upload, forcing fresh bootstrap on recovery. */
+  docDirty?: boolean;
   /** A queued Roost send waiting for earlier inputs; it orders later sends only. */
   queueWaitId?: string;
   recovery?: {
@@ -515,12 +532,39 @@ export async function cancelRoostInputs(ids: readonly string[]) {
   if (ids.length) await acceptedInputs?.cancelSessions(ids);
 }
 
+function raceWithAbort<T>(
+  signal: AbortSignal,
+  promise: Promise<T>,
+): Promise<T> {
+  if (signal.aborted) {
+    void promise.catch(() => {});
+    return Promise.reject(signal.reason ?? new Error('cancelled'));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      void promise.catch(() => {});
+      reject(signal.reason ?? new Error('cancelled'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function actOnPendingInput(
   sessionId: string,
   inputId: string,
   action: 'retry' | 'forget',
-  recoveryTarget?: () => { userId: string; machineId: string },
-) {
+  recoveryTarget?: () => PendingInputRecoveryTarget,
+): Promise<RetryPendingInputResult> {
   const state = sessions.get(sessionId);
   if (state?.target?.backend === 'loro') {
     if (!targetIsCurrent(state)) throw new Error('workspace_changed');
@@ -552,6 +596,7 @@ export async function actOnPendingInput(
       state.recovery.controller.abort();
       state.recovery = undefined;
     }
+    state.uncertainIds.delete(inputId);
     // Loro has no record in the Roost pending-input owner. The caller removes
     // its native Outbox record; this never claims to cancel remote work.
     return { state: 'pending' as const };
@@ -562,38 +607,103 @@ export async function actOnPendingInput(
   const input = owner
     .getSnapshot()
     .find((send) => send.sessionId === sessionId && send.id === inputId);
-  if (!input || owner !== acceptedInputs) throw new Error('session_not_ready');
-  if (action === 'forget') await owner.cancel(inputId);
-  else if (input.error) owner.retry(inputId);
-  return { state: 'pending' as const };
+  if (input && owner === acceptedInputs) {
+    if (action === 'forget') await owner.cancel(inputId);
+    else if (input.error) owner.retry(inputId);
+    return { state: 'pending' as const };
+  }
+  if (state?.target?.backend === 'roost' && targetIsCurrent(state)) {
+    if (action === 'forget') {
+      if (state.recovery?.inputId === inputId) {
+        state.recovery.controller.abort();
+        state.recovery = undefined;
+      }
+      state.uncertainIds.delete(inputId);
+      return { state: 'pending' as const };
+    }
+    if (recoveryTarget) {
+      if (state.sending || state.queueWaitId)
+        throw new Error('send_in_progress');
+      if (state.recovery) {
+        if (state.recovery.inputId !== inputId)
+          throw new Error('send_in_progress');
+        return state.recovery.promise;
+      }
+      const controller = new AbortController();
+      const promise = recoverRoostInput(
+        state,
+        inputId,
+        recoveryTarget,
+        controller.signal,
+      );
+      const recovery = { inputId, controller, promise };
+      state.recovery = recovery;
+      try {
+        return await promise;
+      } finally {
+        if (state.recovery === recovery) state.recovery = undefined;
+      }
+    }
+  }
+  throw new Error('session_not_ready');
 }
 
-/** Reconcile an explicit user request; never replay the original history write. */
-async function recoverLoroInput(
+async function syncRemoteSessionDoc(
   state: SessionState,
-  inputId: string,
-  resolve: () => { userId: string; machineId: string },
-  cancelled: AbortSignal,
-): Promise<RetryPendingInputResult> {
-  const target = resolve();
-  const signal = AbortSignal.any([
-    state.controller.signal,
-    cancelled,
-    AbortSignal.timeout(25_000),
-  ]);
-  const check = () => {
-    signal.throwIfAborted();
-    if (sessions.get(state.id) !== state || !targetIsCurrent(state))
-      throw new Error('workspace_changed');
-    const current = resolve();
-    if (
-      current.machineId !== target.machineId ||
-      current.userId !== target.userId
-    )
-      throw new Error('workspace_changed');
-  };
-  // The session replica may contain the unacknowledged local write. Only a
-  // fresh server snapshot/catch-up proves that the original input was saved.
+  signal: AbortSignal,
+  check: () => void,
+): Promise<LoroDoc> {
+  const canCatchUp =
+    !state.docDirty &&
+    state.unsent.size === 0 &&
+    state.ready &&
+    state.syncedOffset !== undefined;
+  if (canCatchUp) {
+    const incremental = state.doc.fork();
+    try {
+      let offset = state.syncedOffset!;
+      let cursor = state.syncedCursor;
+      let upToDate = false;
+      let size = 0;
+      let fallback = false;
+      for (let pages = 0; !upToDate; pages++) {
+        if (pages >= 100) throw new Error('session_limit');
+        check();
+        const next = await state.client.readOnce({ offset, cursor, signal });
+        check();
+        if (!next.ok) {
+          if (
+            [
+              'invalid_cursor',
+              'offset_out_of_range',
+              'not_found',
+              'gone',
+            ].includes(next.result.code)
+          ) {
+            fallback = true;
+            break;
+          }
+          throw new Error(next.result.code);
+        }
+        if (next.result.closed) throw new Error('stream_closed');
+        if (next.result.payload) {
+          size += next.result.payload.body.length;
+          if (size > 32 * 1024 * 1024) throw new Error('session_limit');
+          importUpdates(incremental, next.result.payload.body);
+        }
+        if (next.result.nextOffset === offset && !next.result.upToDate) {
+          fallback = true;
+          break;
+        }
+        ({ nextOffset: offset, cursor, upToDate } = next.result);
+      }
+      if (!fallback) return incremental;
+      incremental.free();
+    } catch (error) {
+      incremental.free();
+      throw error;
+    }
+  }
   const remote = new LoroDoc();
   try {
     check();
@@ -623,57 +733,281 @@ async function recoverLoroInput(
         throw new Error('stalled_cursor');
       ({ nextOffset: offset, cursor, upToDate } = next.result);
     }
-    const history = remote.getList('history').toJSON() as Record<string, any>[];
-    const entry = history.find(
-      (entry) => entry.id === inputId && entry.role === 'user',
-    );
-    if (!entry) throw new Error('input_not_confirmed');
-    if (entry.userId !== target.userId) throw new Error('input_owner_changed');
+    return remote;
+  } catch (error) {
+    remote.free();
+    throw error;
+  }
+}
+
+function mergeConfirmedRemote(state: SessionState, remote: LoroDoc) {
+  if (sessions.get(state.id) !== state || !targetIsCurrent(state)) return;
+  const delta = remote.export({ mode: 'update', from: state.doc.version() });
+  if (delta.length) {
+    state.doc.import(delta);
+    scheduleEmit(state, state.status);
+  }
+}
+
+async function recoverRoostInput(
+  state: SessionState,
+  inputId: string,
+  resolve: () => PendingInputRecoveryTarget,
+  cancelled: AbortSignal,
+): Promise<RetryPendingInputResult> {
+  const target = resolve();
+  if (target.missingHistory) {
+    state.uncertainIds.delete(inputId);
+    return { state: 'terminal' };
+  }
+  const signal = AbortSignal.any([
+    state.controller.signal,
+    cancelled,
+    AbortSignal.timeout(RECOVER_SYNC_TIMEOUT_MS),
+  ]);
+  const check = () => {
+    signal.throwIfAborted();
+    if (sessions.get(state.id) !== state || !targetIsCurrent(state))
+      throw new Error('workspace_changed');
+    const current = resolve();
     if (
-      ['handled', 'failed', 'canceled'].includes(entry.status) ||
-      history.some(
-        (entry) => entry.role === 'assistant' && entry.userTurnId === inputId,
-      )
+      current.machineId !== target.machineId ||
+      current.userId !== target.userId
     )
+      throw new Error('workspace_changed');
+    return current;
+  };
+  check();
+  if (!state.roostReader) throw new Error('session_not_ready');
+  const read = await raceWithAbort(
+    signal,
+    state.roostReader.sessionData.history.readTurn(inputId),
+  );
+  const currentAfterRead = check();
+  if (currentAfterRead.missingHistory) {
+    state.uncertainIds.delete(inputId);
+    return { state: 'terminal' };
+  }
+  if (read.state === 'ready' && read.turn && typeof read.turn === 'object') {
+    const turn = read.turn as Record<string, any>;
+    const knownHistory = (state.roostWindow?.turns ??
+      state.roostMetadata ??
+      []) as Record<string, any>[];
+    if (
+      ['handled', 'failed', 'canceled'].includes(turn.status) ||
+      knownHistory.some(
+        (item) => item.role === 'assistant' && item.userTurnId === inputId,
+      )
+    ) {
+      state.uncertainIds.delete(inputId);
       return { state: 'settled' };
-    if (entry.status === 'processing') return { state: 'accepted' };
+    }
+    state.uncertainIds.delete(inputId);
+    return { state: 'accepted' };
+  }
+  const receipt = await raceWithAbort(
+    signal,
+    state.roostReader.sessionData.inputAcceptance.lookup({ id: inputId }),
+  );
+  const currentAfterLookup = check();
+  if (currentAfterLookup.missingHistory) {
+    state.uncertainIds.delete(inputId);
+    return { state: 'terminal' };
+  }
+  if (receipt.status === 'accepted') {
+    state.uncertainIds.delete(inputId);
+    return { state: 'accepted' };
+  }
+  // Check control stream mq for queued Roost sends before declaring not_saved.
+  const remote = await syncRemoteSessionDoc(state, signal, () => {
+    check();
+  });
+  try {
+    const currentAfterSync = check();
+    if (currentAfterSync.missingHistory) {
+      state.uncertainIds.delete(inputId);
+      return { state: 'terminal' };
+    }
+    const mq = remote.getMovableList('mq').toJSON() as Record<string, any>[];
+    const queuedItem = mq.find((item) => item.userTurnId === inputId);
+    if (queuedItem) {
+      if (queuedItem.userId && queuedItem.userId !== target.userId)
+        throw new Error('input_owner_changed');
+      mergeConfirmedRemote(state, remote);
+      await state.markDispatch(state.id, inputId, true);
+      state.uncertainIds.delete(inputId);
+      return { state: 'queued' };
+    }
+    state.uncertainIds.delete(inputId);
+    return { state: 'not_saved' };
+  } finally {
+    remote.free();
+  }
+}
+
+/** Reconcile an explicit user request; never replay the original history write. */
+async function recoverLoroInput(
+  state: SessionState,
+  inputId: string,
+  resolve: () => PendingInputRecoveryTarget,
+  cancelled: AbortSignal,
+): Promise<RetryPendingInputResult> {
+  const target = resolve();
+  if (target.missingHistory) {
+    state.uncertainIds.delete(inputId);
+    return { state: 'terminal' };
+  }
+  const syncSignal = AbortSignal.any([
+    state.controller.signal,
+    cancelled,
+    AbortSignal.timeout(RECOVER_SYNC_TIMEOUT_MS),
+  ]);
+  const check = (signal: AbortSignal) => {
+    signal.throwIfAborted();
+    if (sessions.get(state.id) !== state || !targetIsCurrent(state))
+      throw new Error('workspace_changed');
+    const current = resolve();
     if (
-      !['pending', 'seen'].includes(entry.status) ||
-      entry.inputConfig?._lodyDeliveryKind === 'steer' ||
-      (remote.getMovableList('mq').toJSON() as Record<string, any>[]).some(
-        (item) => item.userTurnId === inputId,
+      current.machineId !== target.machineId ||
+      current.userId !== target.userId
+    )
+      throw new Error('workspace_changed');
+    return current;
+  };
+  const remote = await syncRemoteSessionDoc(state, syncSignal, () => {
+    check(syncSignal);
+  });
+  try {
+    const latestMeta = check(syncSignal);
+    if (latestMeta.missingHistory) {
+      state.uncertainIds.delete(inputId);
+      return { state: 'terminal' };
+    }
+    const history = remote.getList('history').toJSON() as Record<string, any>[];
+    const mq = remote.getMovableList('mq').toJSON() as Record<string, any>[];
+    const entryIndex = history.findIndex(
+      (item) => item.id === inputId && item.role === 'user',
+    );
+    const entry = entryIndex >= 0 ? history[entryIndex] : undefined;
+    const queuedItem = mq.find((item) => item.userTurnId === inputId);
+    if (!entry && !queuedItem) {
+      // Authoritative upToDate server read proved the original write never landed.
+      state.uncertainIds.delete(inputId);
+      return { state: 'not_saved' };
+    }
+    if (!entry && queuedItem) {
+      if (queuedItem.userId && queuedItem.userId !== target.userId)
+        throw new Error('input_owner_changed');
+      mergeConfirmedRemote(state, remote);
+      await state.markDispatch(state.id, inputId, true);
+      state.uncertainIds.delete(inputId);
+      return { state: 'queued' };
+    }
+    if (entry!.userId !== target.userId) throw new Error('input_owner_changed');
+    mergeConfirmedRemote(state, remote);
+    if (
+      ['handled', 'failed', 'canceled'].includes(entry!.status) ||
+      history.some(
+        (item) => item.role === 'assistant' && item.userTurnId === inputId,
       )
+    ) {
+      state.uncertainIds.delete(inputId);
+      return { state: 'settled' };
+    }
+    if (entry!.status === 'processing') {
+      state.uncertainIds.delete(inputId);
+      return { state: 'accepted' };
+    }
+    if (queuedItem) {
+      await state.markDispatch(state.id, inputId, true);
+      state.uncertainIds.delete(inputId);
+      return { state: 'queued' };
+    }
+    if (
+      !['pending', 'seen'].includes(entry!.status) ||
+      entry!.inputConfig?._lodyDeliveryKind === 'steer'
     )
       throw new Error('input_not_recoverable');
-    if (!entry.inputConfig || typeof entry.timestamp !== 'string')
+    if (!entry!.inputConfig || typeof entry!.timestamp !== 'string')
       throw new Error('input_not_recoverable');
-    check();
-    const reply = await machineRpc(
-      state.workspace,
-      target.machineId,
-      'session/dispatch-turn',
-      {
-        sessionId: state.id,
-        userTurnId: inputId,
-        userId: target.userId,
-        timestamp: entry.timestamp,
-        inputConfig: entry.inputConfig,
-      },
-      async () => {
-        check();
-        const grant = await sessionGrant(state);
-        check();
-        return grant;
-      },
-      signal,
-    );
-    check();
-    const result = reply.result as
-      { accepted?: boolean; disposition?: string } | undefined;
-    if (!result?.accepted) throw new Error('dispatch_unconfirmed');
-    return {
-      state: result.disposition === 'already-terminal' ? 'settled' : 'accepted',
-    };
+    // Repair :meta.latestUserMsgId unless a newer user turn already owns it (web activateUserTurn).
+    const latest = latestMeta.latestUserMsgId;
+    const latestIndex = latest
+      ? history.findIndex((item) => item.id === latest && item.role === 'user')
+      : -1;
+    let pointerReady = latest === inputId || latestIndex > entryIndex;
+    let markError: unknown;
+    if (!pointerReady) {
+      try {
+        await state.markDispatch(state.id, inputId);
+        pointerReady = true;
+      } catch (error) {
+        markError = error;
+      }
+    }
+    const rpcSignal = AbortSignal.any([
+      state.controller.signal,
+      cancelled,
+      AbortSignal.timeout(RECOVER_RPC_TIMEOUT_MS),
+    ]);
+    const currentBeforeRpc = check(rpcSignal);
+    if (currentBeforeRpc.missingHistory) {
+      state.uncertainIds.delete(inputId);
+      return { state: 'terminal' };
+    }
+    try {
+      const reply = await raceWithAbort(
+        rpcSignal,
+        machineRpc(
+          state.workspace,
+          target.machineId,
+          'session/dispatch-turn',
+          {
+            sessionId: state.id,
+            userTurnId: inputId,
+            userId: target.userId,
+            timestamp: entry!.timestamp,
+            inputConfig: entry!.inputConfig,
+          },
+          async () => {
+            check(rpcSignal);
+            const grant = await sessionGrant(state);
+            check(rpcSignal);
+            return grant;
+          },
+          rpcSignal,
+          undefined,
+          RECOVER_RPC_TIMEOUT_MS,
+        ),
+      );
+      check(rpcSignal);
+      const result = reply.result as
+        { accepted?: boolean; disposition?: string } | undefined;
+      if (result?.accepted) {
+        state.uncertainIds.delete(inputId);
+        return {
+          state:
+            result.disposition === 'already-terminal' ? 'settled' : 'accepted',
+        };
+      }
+      if (pointerReady) {
+        state.uncertainIds.delete(inputId);
+        return { state: 'accepted' };
+      }
+      throw new Error('dispatch_unconfirmed');
+    } catch (error) {
+      if (
+        cancelled.aborted ||
+        state.controller.signal.aborted ||
+        (error instanceof Error && error.message === 'workspace_changed')
+      )
+        throw error;
+      if (pointerReady) {
+        state.uncertainIds.delete(inputId);
+        return { state: 'accepted' };
+      }
+      throw error ?? markError ?? new Error('dispatch_unconfirmed');
+    }
   } finally {
     remote.free();
   }
@@ -1262,6 +1596,7 @@ export async function openSession(
     controller,
     ready: false,
     sending: false,
+    uncertainIds: new Set(),
     status: 'syncing',
     firstQueuedAt: 0,
     lastSignal: '',
@@ -1629,6 +1964,8 @@ export async function openSession(
         ));
       while (!controller.signal.aborted) {
         if (upToDate) {
+          state.syncedOffset = offset;
+          state.syncedCursor = cursor;
           state.streamReady = true;
           updateReadiness();
           if (changed || state.status !== 'live')
@@ -1790,6 +2127,7 @@ export async function sendTurn(
   ) => text,
   selectMcp: (persisted: unknown) => Promise<string[]> = async (ids) =>
     Array.isArray(ids) ? ids : [],
+  signal?: AbortSignal,
 ): Promise<SendTurnResult> {
   const state = sessions.get(args.sessionId);
   if (!state || !sessionSendReady(state))
@@ -1805,6 +2143,7 @@ export async function sendTurn(
   if (
     args.id &&
     (state.sendingId === args.id ||
+      state.uncertainIds.has(args.id) ||
       [
         ...((snapshot(state).history as any[]) ?? []),
         ...((state.doc.toJSON().mq as any[]) ?? []).map((item) => ({
@@ -1812,7 +2151,7 @@ export async function sendTurn(
         })),
       ].some((entry) => entry.id === args.id))
   )
-    // The local entry may come from a lost append ACK. Never replay its write.
+    // The local entry or uncertain id may come from a lost append ACK. Never replay its write.
     return { id: args.id, state: 'unknown', reason: 'turn_already_exists' };
   if (state.sending || state.queueWaitId || state.recovery)
     return { state: 'not_sent', reason: 'session_not_ready' };
@@ -1889,15 +2228,19 @@ export async function sendTurn(
   const id = args.id ?? crypto.randomUUID(),
     timestamp = new Date().toISOString();
   const startedAt = Date.now();
+  const sendSignal = signal
+    ? AbortSignal.any([state.controller.signal, signal])
+    : state.controller.signal;
   reserved.add(state.id);
   state.sending = true;
   state.sendingId = id;
   let holdsSession = true;
   let uploaded = false;
   let writeStarted = false;
-  let ackTail: ReturnType<typeof createTailReader> | undefined;
   try {
-    const expanded = await expand(text);
+    sendSignal.throwIfAborted();
+    const expanded = await raceWithAbort(sendSignal, expand(text));
+    sendSignal.throwIfAborted();
     text = typeof expanded === 'string' ? expanded : expanded.text;
     let spans: (MessageReference | MessageQuoteSpan)[] | undefined =
       typeof expanded === 'string' ? undefined : expanded.spans;
@@ -1952,8 +2295,9 @@ export async function sendTurn(
           agentConfigId: args.agentConfigId,
         },
         () => sessionGrant(state),
-        AbortSignal.any([state.controller.signal, AbortSignal.timeout(30000)]),
+        AbortSignal.any([sendSignal, AbortSignal.timeout(15000)]),
       );
+      sendSignal.throwIfAborted();
       if (sessions.get(state.id) !== state || !sessionControlsReady(state))
         throw new Error('session_not_ready');
       const applied = roleRunConfigApplied(role.runConfig, {
@@ -1971,7 +2315,11 @@ export async function sendTurn(
       )?.acpSessionConfig.mcpServerIds ?? previous.mcpServerIds;
     if (!Array.isArray(persistedMcp) && (started || pendingQueue.length > 0))
       persistedMcp = [];
-    const mcpServerIds = await selectMcp(persistedMcp);
+    const mcpServerIds = await raceWithAbort(
+      sendSignal,
+      selectMcp(persistedMcp),
+    );
+    sendSignal.throwIfAborted();
     if (sessions.get(state.id) !== state || !sessionControlsReady(state))
       throw new Error('session_not_ready');
     const inputConfig = {
@@ -2114,37 +2462,44 @@ export async function sendTurn(
     if (queued) {
       const writeQueue = async (): Promise<SendTurnResult> => {
         if (!targetIsCurrent(state)) throw new Error('workspace_changed');
+        sendSignal.throwIfAborted();
         const before = state.doc.version();
+        const staged = state.doc.fork();
+        let update: Uint8Array;
+        try {
+          staged
+            .getMap('humanInputReceipts')
+            .set(id, { userId: args.userId!.trim() });
+          const item = staged.getMovableList('mq').pushContainer(new LoroMap());
+          for (const [key, value] of Object.entries({
+            task: text,
+            userId: args.userId,
+            userTurnId: id,
+            timestamp,
+          }))
+            item.set(key, value);
+          const config = item.setContainer('acpSessionConfig', new LoroMap());
+          for (const [key, value] of Object.entries({
+            ...inputConfig,
+            chainDepth: 0,
+          }))
+            if (value !== undefined) config.set(key, value);
+          staged.commit();
+          update = staged.export({ mode: 'update', from: before });
+        } finally {
+          staged.free();
+        }
+        sendSignal.throwIfAborted();
         writeStarted = true;
-        state.doc
-          .getMap('humanInputReceipts')
-          .set(id, { userId: args.userId!.trim() });
-        const item = state.doc
-          .getMovableList('mq')
-          .pushContainer(new LoroMap());
-        for (const [key, value] of Object.entries({
-          task: text,
-          userId: args.userId,
-          userTurnId: id,
-          timestamp,
-        }))
-          item.set(key, value);
-        const config = item.setContainer('acpSessionConfig', new LoroMap());
-        for (const [key, value] of Object.entries({
-          ...inputConfig,
-          chainDepth: 0,
-        }))
-          if (value !== undefined) config.set(key, value);
-        state.doc.commit();
         const result = await state.client.append({
           part: {
             contentType: 'application/octet-stream',
-            body: encodeFrame(
-              state.doc.export({ mode: 'update', from: before }),
-            ),
+            body: encodeFrame(update),
           },
         });
         if (!result.ok) throw new Error(result.result.code);
+        state.doc.import(update);
+        state.uncertainIds.delete(id);
         uploaded = true;
         await state.markDispatch(state.id, id, true);
         scheduleEmit(state, state.status);
@@ -2171,7 +2526,7 @@ export async function sendTurn(
           return await owner.afterInputs(
             state.id,
             predecessors,
-            AbortSignal.any([state.controller.signal, waitEnded.signal]),
+            AbortSignal.any([sendSignal, waitEnded.signal]),
             writeQueue,
           );
         } catch (error) {
@@ -2186,37 +2541,46 @@ export async function sendTurn(
       }
       return await writeQueue();
     }
-    if (guide) {
-      state.steerReceipts ??= new Map();
-      state.steerReceipts.set(id, { targetId: guide.id, state: 'confirming' });
-    }
+    sendSignal.throwIfAborted();
     const before = state.doc.version();
+    const staged = state.doc.fork();
+    let update: Uint8Array;
+    try {
+      staged
+        .getMap('humanInputReceipts')
+        .set(id, { userId: args.userId.trim() });
+      if (guide)
+        staged
+          .getMap('lodySteerLinks')
+          .set(id, { targetId: guide.id, mode: 'native' });
+      appendUserTurn(
+        staged,
+        id,
+        text,
+        args.userId,
+        inputConfig,
+        timestamp,
+        guide ? 'pending_apply' : 'pending',
+      );
+      update = staged.export({ mode: 'update', from: before });
+    } finally {
+      staged.free();
+    }
+    sendSignal.throwIfAborted();
     writeStarted = true;
-    state.doc
-      .getMap('humanInputReceipts')
-      .set(id, { userId: args.userId.trim() });
-    if (guide)
-      state.doc
-        .getMap('lodySteerLinks')
-        .set(id, { targetId: guide.id, mode: 'native' });
-    appendUserTurn(
-      state.doc,
-      id,
-      text,
-      args.userId,
-      inputConfig,
-      timestamp,
-      guide ? 'pending_apply' : 'pending',
-    );
     const result = await state.client.append({
       part: {
         contentType: 'application/octet-stream',
-        body: encodeFrame(state.doc.export({ mode: 'update', from: before })),
+        body: encodeFrame(update),
       },
     });
     if (!result.ok) throw new Error(result.result.code);
+    state.doc.import(update);
+    state.uncertainIds.delete(id);
     uploaded = true;
     if (guide) {
+      state.steerReceipts ??= new Map();
+      state.steerReceipts.set(id, { targetId: guide.id, state: 'confirming' });
       sendObserver(state.id);
       // History is durable; receipt tracking belongs to this message, not the
       // session-wide write lock. A later guide can be persisted while RPC waits.
@@ -2255,100 +2619,57 @@ export async function sendTurn(
     await state.markDispatch(state.id, id);
     if (sessions.get(state.id) !== state) throw new Error('runtime_replaced');
     scheduleEmit(state, 'live');
-    const replyTo = `${state.workspace}:rpc:res:${args.machineId}:${crypto.randomUUID()}`;
-    const responseClient = await clientFor(replyTo, () => sessionGrant(state));
-    const created = await responseClient.create({
-      contentType: 'application/json',
-      ttlSeconds: 300,
-    });
-    if (!created.ok) throw new Error(created.result.code);
-    const requestId = crypto.randomUUID(),
-      now = Date.now();
-    const requestClient = await clientFor(
-      `${state.workspace}:rpc:req:${args.machineId}`,
-      () => sessionGrant(state),
-    );
-    const dispatched = await requestClient.append({
-      part: {
-        contentType: 'application/json',
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: requestId,
-          rpcVersion: '1',
-          workspaceId: state.workspace,
-          machineId: args.machineId,
-          replyTo,
-          sentAt: now,
-          expiresAt: now + 15000,
-          method: 'session/dispatch-turn',
-          params: {
+    // Both :s:<id> and :meta.latestUserMsgId are durable. Accelerate via Machine RPC
+    // best-effort; offline/sleeping computers or transient RPC errors never block send.
+    try {
+      const rpcSignal = AbortSignal.any([
+        sendSignal,
+        AbortSignal.timeout(DISPATCH_RPC_TIMEOUT_MS),
+      ]);
+      const reply = await raceWithAbort(
+        rpcSignal,
+        machineRpc(
+          state.workspace,
+          args.machineId,
+          'session/dispatch-turn',
+          {
             sessionId: state.id,
             userTurnId: id,
             userId: args.userId,
             timestamp,
             inputConfig,
           },
-        }),
-      },
-    });
-    if (!dispatched.ok) throw new Error(dispatched.result.code);
-    const signal = AbortSignal.any([
-      state.controller.signal,
-      AbortSignal.timeout(18000),
-    ]);
-    ackTail = streamsWebSocketEnabled
-      ? createTailReader(
-          responseClient,
-          streamsWebSocket(
-            () => sessionGrant(state),
-            (await sessionGrant(state)).gatewayBaseUrl,
-            state.workspace,
-          ),
-        )
-      : undefined;
-    let offset = '-1';
-    while (!signal.aborted) {
-      const read = ackTail
-        ? await ackTail.read({ offset, signal })
-        : await responseClient.readOnce({
-            offset,
-            live: 'long-poll',
-            signal,
-          });
-      if (!read.ok) throw new Error(read.result.code);
-      offset = read.result.nextOffset;
-      if (!read.result.payload) continue;
-      const parsed = JSON.parse(
-        new TextDecoder().decode(read.result.payload.body),
+          () => sessionGrant(state),
+          rpcSignal,
+          undefined,
+          DISPATCH_RPC_TIMEOUT_MS,
+        ),
       );
-      for (const reply of Array.isArray(parsed) ? parsed : [parsed]) {
-        if (reply.id !== requestId) continue;
-        if (!reply.result?.accepted)
-          throw new Error(
-            reply.error?.message ??
-              reply.result?.error ??
-              reply.result?.disposition ??
-              'dispatch_rejected',
-          );
-        return { id, state: 'accepted' };
-      }
+      const rpcResult = reply.result as { accepted?: boolean } | undefined;
+      if (rpcResult?.accepted) return { id, state: 'accepted' };
+    } catch {
+      // Durable dispatch pointer already landed; fall through as accepted without RPC ACK.
     }
-    throw new Error('ack_timeout');
+    return { id, state: 'accepted', rpcAccepted: false };
   } catch (error) {
     let delivery: 'not_sent' | 'unknown' | 'uploaded' = 'not_sent';
     if (
       writeStarted ||
       (error instanceof Error && error.message === 'input_already_pending')
-    )
+    ) {
       delivery = 'unknown';
+      if (writeStarted && !uploaded) state.uncertainIds.add(id);
+    }
     if (uploaded) delivery = 'uploaded';
+    let reason = error instanceof Error ? error.message : 'send_failed';
+    if (!writeStarted && sendSignal.aborted && !state.controller.signal.aborted)
+      reason = 'send_timeout';
     return {
       id,
       state: delivery,
-      reason: error instanceof Error ? error.message : 'send_failed',
+      reason,
     };
   } finally {
-    ackTail?.close();
     // A released session may already belong to a later control or edit.
     if (holdsSession) state.sending = false;
     if (state.sendingId === id) state.sendingId = undefined;
@@ -2496,7 +2817,10 @@ export async function controlTurn(
             ),
           },
         });
-        if (!removed.ok) throw new Error('steer_unconfirmed');
+        if (!removed.ok) {
+          state.docDirty = true;
+          throw new Error('steer_unconfirmed');
+        }
         scheduleEmit(state, state.status);
         return { state: 'not_applied', reason: 'steer_pending' };
       }
@@ -2543,7 +2867,10 @@ export async function controlTurn(
             ),
           },
         });
-        if (!uploaded.ok) throw new Error('steer_unconfirmed');
+        if (!uploaded.ok) {
+          state.docDirty = true;
+          throw new Error('steer_unconfirmed');
+        }
         const reply = await machineRpc(
           state.workspace,
           args.machineId,
@@ -2602,7 +2929,10 @@ export async function controlTurn(
         },
       });
       scheduleEmit(state, state.status);
-      if (!uploaded.ok) throw new Error('steer_unconfirmed');
+      if (!uploaded.ok) {
+        state.docDirty = true;
+        throw new Error('steer_unconfirmed');
+      }
       params = {
         sessionId: state.id,
         expectedTurnId: args.turnId,

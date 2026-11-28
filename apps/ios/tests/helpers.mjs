@@ -104,6 +104,7 @@ export async function openTestSession({
   afterAppend,
   beforeBootstrap,
   readSession,
+  readCatchup,
   markDispatch = async () => {},
   onRpc,
   onSubscription,
@@ -230,6 +231,21 @@ export async function openTestSession({
       }
       if (readSession && this.url.endsWith(':s:s1'))
         return readSession(options);
+      if (!options.live && this.url.endsWith(':s:s1')) {
+        if (beforeBootstrap) await beforeBootstrap(this.url);
+        if (readCatchup) {
+          const custom = await readCatchup(options, server);
+          if (custom !== undefined) return custom;
+        }
+        if (catchupServer) catchupServer(server);
+        const bytes = server.export({ mode: 'snapshot' });
+        return ok({
+          nextOffset: String(offset),
+          upToDate: true,
+          closed: false,
+          payload: { body: frame(bytes) },
+        });
+      }
       return new Promise((resolve) => {
         sessionRead = resolve;
       });

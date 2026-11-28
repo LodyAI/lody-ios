@@ -37,6 +37,7 @@ struct ChatPendingSend: Decodable {
   var queue: Bool? = nil
   var guide: Bool? = nil
   var phase: String? = nil
+  var rpcAccepted: Bool? = nil
   var uploadProgress: [String: ChatAttachmentUploadProgress]? = nil
   /// The composer's quote cards, sent after the text (`ChatMessageQuote`).
   var quotes: [ChatMessageQuote]? = nil
