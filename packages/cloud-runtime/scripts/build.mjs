@@ -12,6 +12,9 @@ export async function buildDataRuntime(
     define: {
       LODY_MOBILE_WORKER_URL: JSON.stringify(backends.CF_WORKER_URL),
       LODY_MOBILE_STORAGE_SUFFIX: JSON.stringify(backends.STORAGE_SUFFIX),
+      LODY_MOBILE_STREAMS_WS: JSON.stringify(
+        backends.LORO_STREAMS_WS_ENABLED === '1',
+      ),
     },
     plugins: [
       {
