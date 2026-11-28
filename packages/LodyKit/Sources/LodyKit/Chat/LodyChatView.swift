@@ -112,7 +112,14 @@ final class LodyChatView: LodyAppearanceView, UICollectionViewDelegateFlowLayout
   var onMentionBrowse: ([String: Any]) -> Void = { _ in }
   let titleButton = ChatNavigationTitleButton()
   var pageOwnsHeader = false { didSet { composer.fullScreenTopInset = pageHeaderHeight } }
-  var pageHeaderHeight: CGFloat { pageOwnsHeader ? 56 : 0 }
+  var pageHeaderSitsInTopSafeArea = false {
+    didSet {
+      guard pageHeaderSitsInTopSafeArea != oldValue else { return }
+      composer.fullScreenTopInset = pageHeaderHeight
+      setNeedsLayout()
+    }
+  }
+  var pageHeaderHeight: CGFloat { (pageOwnsHeader && !pageHeaderSitsInTopSafeArea) ? 56 : 0 }
   var tabsAnchorView: UIView { titleButton }
   private var navigationTitle = ""
   private var navigationSubtitle = ""

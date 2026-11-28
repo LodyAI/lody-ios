@@ -74,7 +74,8 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   private var observers: [NSObjectProtocol] = []
   private var findToken = 0
   private var listed = false
-  private let moreButton = UIButton(type: .system)
+  private let moreButton = SessionMoreMenuButton(type: .system)
+  private let moreMenuAnchor = UIView()
   private let backButton = UIButton(type: .system)
   private let sidebarButton = UIButton(type: .system)
   private var sidebarAction: UIAction?
@@ -82,6 +83,12 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   private let sideRail = UIStackView()
   private let rootView = SessionRootView()
   private var usingSideRail = false
+  private var defaultHeaderConstraints: [NSLayoutConstraint] = []
+  private var topBarHeaderConstraints: [NSLayoutConstraint] = []
+  private var topBarHeaderTop: NSLayoutConstraint?
+  private var topBarHeaderLeading: NSLayoutConstraint?
+  private var topBarHeaderWidth: NSLayoutConstraint?
+  private var currentTopHeaderFrame: CGRect?
   var sideRailEnvironment: (() -> LodyVerticalBarRail.Environment)?
   private lazy var tabsButton: DirectoryTabsButton = {
     let button = DirectoryTabsButton()
@@ -510,6 +517,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    updatePageBack()
     updateSideRail()
   }
 
@@ -539,7 +547,7 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
 
   private func updateSideRail() {
     guard isViewLoaded else { return }
-    let visibleCount = (tabsButton.isHidden ? 0 : 1) + (moreButton.isHidden ? 0 : 1)
+    let visibleCount = (backButton.isHidden ? 0 : 1) + (tabsButton.isHidden ? 0 : 1) + (moreButton.isHidden ? 0 : 1)
     let env: LodyVerticalBarRail.Environment
     if let sideRailEnvironment {
       env = sideRailEnvironment()
@@ -573,18 +581,66 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       itemCount: visibleCount
     )
     applySideRail(placement: placement)
+
+    let cornerH: CGRect
+    if #available(iOS 26.0, *) {
+      cornerH = view.layoutGuide(for: .safeArea(cornerAdaptation: .horizontal)).layoutFrame
+    } else {
+      cornerH = view.safeAreaLayoutGuide.layoutFrame
+    }
+    let topHeaderFrame = LodyVerticalBarRail.topBarHeaderPlacement(
+      in: view.bounds,
+      systemHasVerticalBar: env.systemHasVerticalBar,
+      safeArea: view.safeAreaInsets,
+      cornerAdaptedHorizontal: cornerH,
+      occlusions: env.occlusions
+    )
+    applyTopBarHeader(frame: topHeaderFrame)
+  }
+
+  private func applyTopBarHeader(frame: CGRect?) {
+    guard frame != currentTopHeaderFrame else { return }
+    currentTopHeaderFrame = frame
+    if let frame {
+      NSLayoutConstraint.deactivate(defaultHeaderConstraints)
+      topBarHeaderTop?.constant = frame.minY
+      topBarHeaderLeading?.constant = frame.minX
+      topBarHeaderWidth?.constant = frame.width
+      NSLayoutConstraint.activate(topBarHeaderConstraints)
+      chat.pageHeaderSitsInTopSafeArea = true
+    } else {
+      NSLayoutConstraint.deactivate(topBarHeaderConstraints)
+      NSLayoutConstraint.activate(defaultHeaderConstraints)
+      chat.pageHeaderSitsInTopSafeArea = false
+    }
+    view.setNeedsLayout()
   }
 
   func applySideRail(placement: LodyVerticalBarRail.Placement?) {
     let shouldUseRail = placement != nil
     if shouldUseRail != usingSideRail {
       usingSideRail = shouldUseRail
-      let target: UIStackView = shouldUseRail ? sideRail : pageHeader
-      let previous: UIStackView = shouldUseRail ? pageHeader : sideRail
-      for button in [tabsButton, moreButton] as [UIButton] {
-        previous.removeArrangedSubview(button)
-        button.removeFromSuperview()
-        target.addArrangedSubview(button)
+      let railControls: [UIButton] = [backButton, tabsButton, moreButton]
+      if shouldUseRail {
+        for button in railControls {
+          pageHeader.removeArrangedSubview(button)
+          button.removeFromSuperview()
+          sideRail.addArrangedSubview(button)
+        }
+      } else {
+        for button in railControls {
+          sideRail.removeArrangedSubview(button)
+          button.removeFromSuperview()
+        }
+        // Restore canonical header order: sidebar, back, title, tabs, more.
+        let ordered: [UIView] = [sidebarButton, backButton, chat.titleButton, tabsButton, moreButton]
+        for control in pageHeader.arrangedSubviews {
+          pageHeader.removeArrangedSubview(control)
+          control.removeFromSuperview()
+        }
+        for control in ordered {
+          pageHeader.addArrangedSubview(control)
+        }
       }
       UIAccessibility.post(notification: .layoutChanged, argument: nil)
     }
@@ -594,10 +650,20 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
       if sideRail.frame != placement.frame {
         sideRail.frame = placement.frame
       }
+      let safeFrame = view.safeAreaLayoutGuide.layoutFrame
+      let itemSize = LodyVerticalBarRail.itemSize
+      let aboveMoreCount = (backButton.isHidden ? 0 : 1) + (tabsButton.isHidden ? 0 : 1)
+      let moreY = placement.frame.minY + CGFloat(aboveMoreCount) * (itemSize + LodyVerticalBarRail.spacing)
+      let anchorX = placement.edge == .left
+        ? safeFrame.minX + 16
+        : safeFrame.maxX - 16 - itemSize
+      moreMenuAnchor.frame = CGRect(x: anchorX, y: moreY, width: itemSize, height: itemSize)
+      moreButton.menuAnchorView = moreMenuAnchor
       view.bringSubviewToFront(sideRail)
     } else {
       sideRail.isHidden = true
       sideRail.accessibilityElementsHidden = true
+      moreButton.menuAnchorView = nil
     }
   }
 
@@ -688,6 +754,10 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     }
     backButton.accessibilityIdentifier = "BackButton"
     backButton.accessibilityLabel = String(localized: "common.back", bundle: .lody)
+    backButton.showsLargeContentViewer = true
+    backButton.scalesLargeContentImage = true
+    backButton.largeContentTitle = backButton.accessibilityLabel
+    backButton.largeContentImage = UIImage(systemName: "chevron.backward")
     backButton.addAction(UIAction { [weak self] _ in self?.goBack() }, for: .touchUpInside)
     moreButton.accessibilityIdentifier = "chat-more"
     moreButton.accessibilityLabel = String(localized: "common.more", bundle: .lody)
@@ -727,13 +797,19 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     tint.isUserInteractionEnabled = false
     tint.backgroundColor = UIColor.lodyBackground.withAlphaComponent(0.55)
     tint.translatesAutoresizingMaskIntoConstraints = false
+    moreMenuAnchor.backgroundColor = .clear
+    moreMenuAnchor.isUserInteractionEnabled = false
+    moreMenuAnchor.isAccessibilityElement = false
+    moreMenuAnchor.accessibilityElementsHidden = true
     view.addSubview(tint)
     view.addSubview(pageHeader)
+    view.addSubview(moreMenuAnchor)
     view.addSubview(sideRail)
     rootView.headerView = pageHeader
     rootView.sideRailView = sideRail
     rootView.chatView = chat
     rootView.ignoredAccessibilityViews.insert(ObjectIdentifier(tint))
+    rootView.ignoredAccessibilityViews.insert(ObjectIdentifier(moreMenuAnchor))
     NSLayoutConstraint.activate([
       tint.topAnchor.constraint(equalTo: view.topAnchor),
       tint.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -753,13 +829,22 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
     let preferredTrailing = pageHeader.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16)
     preferredLeading.priority = .defaultHigh
     preferredTrailing.priority = .defaultHigh
-    NSLayoutConstraint.activate([
+    defaultHeaderConstraints = [
       pageHeader.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
       preferredLeading,
       preferredTrailing,
       pageHeader.leadingAnchor.constraint(greaterThanOrEqualTo: headerArea.leadingAnchor),
       pageHeader.trailingAnchor.constraint(lessThanOrEqualTo: headerArea.trailingAnchor),
-      pageHeader.heightAnchor.constraint(equalToConstant: chat.pageHeaderHeight),
+    ]
+    let liftedTop = pageHeader.topAnchor.constraint(equalTo: view.topAnchor)
+    let liftedLeading = pageHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+    let liftedWidth = pageHeader.widthAnchor.constraint(equalToConstant: 0)
+    topBarHeaderTop = liftedTop
+    topBarHeaderLeading = liftedLeading
+    topBarHeaderWidth = liftedWidth
+    topBarHeaderConstraints = [liftedTop, liftedLeading, liftedWidth]
+    NSLayoutConstraint.activate(defaultHeaderConstraints + [
+      pageHeader.heightAnchor.constraint(equalToConstant: LodyVerticalBarRail.topHeaderHeight),
       chat.topAnchor.constraint(equalTo: view.topAnchor),
       chat.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       chat.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -1009,6 +1094,25 @@ class SessionController: UIViewController, LodyPageOwnedHeader, UIPopoverPresent
   }
 }
 #endif
+
+/// Anchors the native pull-down `UIMenu` beside the Duo vertical-bar rail when `menuAnchorView`
+/// is set, keeping the entire vertical-bar strip clear for one-handed dismissal and sibling taps.
+@MainActor
+private final class SessionMoreMenuButton: UIButton {
+  weak var menuAnchorView: UIView?
+
+  override func contextMenuInteraction(
+    _ interaction: UIContextMenuInteraction,
+    previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration
+  ) -> UITargetedPreview? {
+    guard let menuAnchorView, menuAnchorView.window != nil else {
+      return super.contextMenuInteraction(interaction, previewForHighlightingMenuWithConfiguration: configuration)
+    }
+    let parameters = UIPreviewParameters()
+    parameters.backgroundColor = .clear
+    return UITargetedPreview(view: menuAnchorView, parameters: parameters)
+  }
+}
 
 /// Observes UIKit reserved regions for the vertical-bar side rail and preserves logical
 /// VoiceOver order (page header → side rail → transcript/composer) when the rail is shown.

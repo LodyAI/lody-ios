@@ -188,6 +188,7 @@ final class ChatTabsOverlay: UIView {
     let sourceInRoot = source.map { $0.convert($0.bounds, to: root) }
     let inRightRail = sourceInRoot.map { safeFrame.width > 0 && $0.minX >= safeFrame.maxX - 1 } ?? false
     let inLeftRail = sourceInRoot.map { safeFrame.width > 0 && $0.maxX <= safeFrame.minX + 1 } ?? false
+    let inTopBar = sourceInRoot.map { safeFrame.minY > 0 && $0.maxY <= safeFrame.minY + 1 } ?? false
     var constraints: [NSLayoutConstraint] = [
       topAnchor.constraint(equalTo: root.topAnchor), bottomAnchor.constraint(equalTo: root.bottomAnchor),
       leadingAnchor.constraint(equalTo: root.leadingAnchor), trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -205,6 +206,16 @@ final class ChatTabsOverlay: UIView {
         inLeftRail
           ? card.leadingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.leadingAnchor, constant: LodyLayout.screenPaddingX)
           : card.trailingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.trailingAnchor, constant: -LodyLayout.screenPaddingX),
+      ]
+    } else if let sourceInRoot, inTopBar {
+      // Below the lifted top-bar button (e.g. Duo unfolded portrait), aligned to the button's trailing edge.
+      let trailing = min(
+        safeFrame.maxX - LodyLayout.screenPaddingX,
+        max(safeFrame.minX + LodyLayout.screenPaddingX + cardWidth, sourceInRoot.maxX)
+      )
+      constraints += [
+        card.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: LodySpacing.sm),
+        card.trailingAnchor.constraint(equalTo: root.leadingAnchor, constant: trailing),
       ]
     } else {
       // Below the directory button, aligned to the trailing controls.

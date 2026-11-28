@@ -50,13 +50,21 @@ a vertical bar on the trailing edge. The status bar becomes vertical too.
   `UINavigationBar`, the trailing `84 pt` vertical bar below the status occlusion would
   otherwise sit empty. When `traitCollection.verticalBarEdge != .unspecified` and
   `LodyVerticalBarRail.placement(...)` confirms safe room below `occlusion` regions and
-  above the docked keyboard and any horizontal `division`, `SessionController` moves the
-  same `tabsButton` (when multiple Tabs exist) and `moreButton` into a centered `44 pt`
-  vertical stack (`chat-side-rail`) in that strip, freeing `52–104 pt` for the
-  conversation title and anchoring `ChatTabsOverlay` beside the rail inside the safe
-  area. Whenever space or the vertical bar disappears (unfolded portrait, inspector open
-  beside chat, early mount with empty occlusions, or tight occlusion/keyboard overlap),
-  both controls fall back into `pageHeader`.
+  above the docked keyboard and any horizontal `division`, `SessionController` moves
+  `backButton` (when visible, e.g. on the folded outer display), `tabsButton` (when
+  multiple Tabs exist), and `moreButton` into a centered `44 pt` vertical stack
+  (`chat-side-rail`) in that strip (`8 pt` spacing, `10 pt` vertical clearance so all
+  three buttons stay above the docked keyboard). Both `ChatTabsOverlay` and the native
+  `More` `UIMenu` (via `UITargetedPreview`) anchor inside the safe area beside the rail
+  so the vertical-bar strip stays clear for one-handed dismissal.
+- In unfolded portrait (`669 × 951 pt`), iOS moves the circular status indicator to the
+  top-right corner (`reservedRegions(kind: .occlusion)` at `467..669`) and reserves
+  `safeArea.top = 82 pt` for a shared top bar. `LodyVerticalBarRail.topBarHeaderPlacement(...)`
+  lifts `pageHeader` into that `0..82 pt` band beside the status occlusion (`y = 20..76`,
+  vertically aligned at `centerY = 48` with native navigation controls) and clears
+  `LodyChatView`'s extra `56 pt` top inset so transcript content begins at `y = 82`.
+  Whenever space or reserved regions disappear, controls restore in canonical order
+  (`sidebar`, `back`, `title`, `tabs`, `more`) below `safeAreaLayoutGuide.topAnchor`.
 
 ## Two panes at the fold
 
