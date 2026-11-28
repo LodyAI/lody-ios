@@ -51,6 +51,19 @@ def run_simctl(*command, check=True, timeout=120):
     )
 
 
+def run_simulator_test(udid, *arguments, timeout=300, env=None):
+    command = ['xcrun', 'simctl', 'spawn', udid, *arguments]
+    result = subprocess.run(command, stderr=subprocess.PIPE, text=True, timeout=timeout, env=env)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    if result.returncode and 'Process spawn via launchd failed because device is not booted.' in result.stderr:
+        print(f'Simulator {udid} stopped before the test launched. Booting and retrying once.', file=sys.stderr, flush=True)
+        run_simctl('bootstatus', udid, '-b', timeout=300)
+        subprocess.run(command, check=True, timeout=timeout, env=env)
+    else:
+        result.check_returncode()
+
+
 class SimulatorPool:
     def __init__(self, simctl=run_simctl, lock_directory=None, device_type=DEVICE_TYPES['iphone'], runtime=RUNTIME):
         self.runtime = runtime

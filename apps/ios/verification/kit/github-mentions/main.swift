@@ -104,7 +104,9 @@ final class GitHubProtocol: URLProtocol {
     let before = GitHubProtocol.urls.withLock { $0.count }
     let unlinked = try await GitHubMentions.load(workspace: "unlinked", repo: "LodyAI/Lody")
     assert((unlinked["items"] as! [Any]).isEmpty)
-    assert(GitHubProtocol.urls.withLock { $0.count } == before + 2, "Unconnected projects must not fetch GitHub")
+    let unlinkedRequests = GitHubProtocol.urls.withLock { Array($0.dropFirst(before)) }
+    assert(unlinkedRequests.contains("https://convex.lody.ai/api/action"), "Unconnected projects still consult the token broker")
+    assert(!unlinkedRequests.contains { URL(string: $0)?.host == "api.github.com" }, "Unconnected projects must not fetch GitHub")
     let full = try await GitHubMentions.load(workspace: "full", repo: "LodyAI/Lody")
     assert((full["items"] as! [Any]).count == 200 && full["truncated"] as? Bool == true)
     do {
