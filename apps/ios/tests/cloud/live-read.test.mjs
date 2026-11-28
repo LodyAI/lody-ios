@@ -241,6 +241,41 @@ test('caught-up reads take pushed checkpoints from one WebSocket instead of long
   );
 });
 
+test('an event arriving between a quiet read and the next read is preserved', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const peer = streamsPeer();
+  const tail = createTailReader(
+    peer.client,
+    {
+      ...streamsWebSocket(
+        async () => ({ token: 'synthetic' }),
+        GATEWAY,
+        'w1',
+        true,
+      ),
+      webSocketFactory: peer.factory,
+    },
+    { idleMs: 100 },
+  );
+  t.after(() => tail.close());
+  const signal = new AbortController().signal;
+  const first = tail.read({ offset: at(5), signal });
+  await settle(() => peer.joined.length === 1);
+  peer.sockets[0].heartbeat(5);
+  await first;
+
+  const idle = tail.read({ offset: at(5), signal });
+  t.mock.timers.tick(100);
+  assert.equal((await idle).result.status, 204);
+  peer.sockets[0].data(['kept'], 9);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const result = await tail.read({ offset: at(5), signal });
+  assert.equal(text(result), 'kept');
+  assert.equal(result.result.nextOffset, at(9));
+  assert.equal(peer.polls.length, 0);
+});
+
 test('a dropped socket finishes the read over HTTP from the last confirmed offset and backs off', async (t) => {
   // SDK reconnect timers must not run: the reader, not the SDK, recovers.
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
@@ -321,12 +356,47 @@ test('a refused WebSocket token invalidates the cached workspace grant', async (
     invalidate: (token) => refused.push(token),
   });
   const options = streamsWebSocket(getGrant, GATEWAY, 'w1', true);
-  assert.equal(options.authPoolKey, 'lody-mobile:w1');
+  assert.equal(options.authPoolKey, 'lody-mobile:w1:0');
   assert.equal(await options.auth({ reason: 'connect' }), 'grant-1');
   assert.equal(await options.auth({ reason: 'renew' }), 'grant-2');
   assert.deepEqual(refused, []);
   assert.equal(await options.auth({ reason: 'reauth' }), 'grant-3');
   assert.deepEqual(refused, ['grant-2']);
+});
+
+test('the workspace grant survives a short-lived RPC and is fenced when the account scope changes', async () => {
+  const { setWorkspaceSocketGrant, streamsWebSocket } =
+    await withWebSocket('live-read.ts');
+  const refused = [];
+  const getGrant = Object.assign(async () => ({ token: 'workspace-grant' }), {
+    invalidate: (token) => refused.push(token),
+  });
+  setWorkspaceSocketGrant('w1', getGrant);
+  const rpcSignal = new AbortController();
+  const rpc = streamsWebSocket(
+    async () => {
+      rpcSignal.signal.throwIfAborted();
+      return { token: 'rpc-grant' };
+    },
+    GATEWAY,
+    'w1',
+  );
+  assert.equal(await rpc.auth({ reason: 'connect' }), 'workspace-grant');
+  rpcSignal.abort();
+
+  const other = streamsWebSocket(getGrant, GATEWAY, 'w1');
+  assert.equal(other.authPoolKey, rpc.authPoolKey);
+  assert.equal(await rpc.auth({ reason: 'renew' }), 'workspace-grant');
+  // The first lease can be gone by the time a remaining lease sees the refusal.
+  other.onEvent({ type: 'closed', closeCode: 4100, local: false });
+  assert.deepEqual(refused, ['workspace-grant']);
+
+  setWorkspaceSocketGrant('w1', async () => ({ token: 'replacement' }));
+  const replacement = streamsWebSocket(getGrant, GATEWAY, 'w1');
+  assert.notEqual(replacement.authPoolKey, rpc.authPoolKey);
+  await assert.rejects(rpc.auth({ reason: 'renew' }), /workspace_changed/);
+  assert.equal(await replacement.auth({ reason: 'connect' }), 'replacement');
+  assert.equal(streamsWebSocket(getGrant, GATEWAY, 'w2'), undefined);
 });
 
 test('JSON reply streams arrive as one JSON array, as an HTTP read returns them', async (t) => {

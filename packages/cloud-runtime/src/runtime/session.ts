@@ -1646,11 +1646,13 @@ export async function openSession(
             readAttempt(state, upToDate ? 'poll' : 'catchup', async () => {
               livePoll = upToDate && state.streamReady === true;
               const read = { offset, cursor, signal: controller.signal };
-              const result = !livePoll
-                ? await state.client.readOnce(read)
-                : streamsWebSocketEnabled
+              const result =
+                livePoll && streamsWebSocketEnabled
                   ? await (await tailReader()).read(read)
-                  : await state.client.readOnce({ ...read, live: 'long-poll' });
+                  : await state.client.readOnce({
+                      ...read,
+                      ...(livePoll ? { live: 'long-poll' as const } : {}),
+                    });
               if (!result.ok) throw new Error(result.result.code);
               return result;
             }),
@@ -1671,13 +1673,14 @@ export async function openSession(
           await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
-      tail?.close();
       const failed = error instanceof Error ? error : new Error('sync_failed');
       settleControls(state, failed);
       if (controller.signal.aborted || sessions.get(id) !== state) return;
       state.streamReady = false;
       state.ready = false;
       event('offline', failed.message);
+    } finally {
+      tail?.close();
     }
   })();
   return 'watching';

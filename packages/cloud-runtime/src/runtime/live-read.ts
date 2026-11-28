@@ -17,6 +17,26 @@ type GrantSource = (() => Promise<{ token: string }>) & {
   invalidate?: (failedToken?: string) => void;
 };
 
+type SocketAuth = Pick<StreamsClientWebSocketOptions, 'auth' | 'onEvent'>;
+let workspaceSocket:
+  | {
+      workspace: string;
+      grant: GrantSource;
+      generation: number;
+      authByGateway: Map<string, SocketAuth>;
+    }
+  | undefined;
+
+/** The SDK retains the first auth callback until the last pooled lease closes. */
+export function setWorkspaceSocketGrant(workspace: string, grant: GrantSource) {
+  workspaceSocket = {
+    workspace,
+    grant,
+    generation: (workspaceSocket?.generation ?? 0) + 1,
+    authByGateway: new Map(),
+  };
+}
+
 /**
  * Pooled `loro-ds-v1` options for one workspace. Every reader in a workspace
  * shares one socket, authenticated with the workspace Streams grant.
@@ -27,18 +47,43 @@ export function streamsWebSocket(
   workspace: string,
   enabled = streamsWebSocketEnabled,
 ): StreamsClientWebSocketOptions | undefined {
-  if (!enabled) return undefined;
-  let last: string | undefined;
+  const scope = workspaceSocket;
+  if (!enabled || (scope && scope.workspace !== workspace)) return undefined;
+  const grant = scope?.grant ?? getGrant;
+  let socketAuth = scope?.authByGateway.get(gatewayBaseUrl);
+  if (!socketAuth) {
+    let last: string | undefined;
+    const isCurrent = () => !scope || scope === workspaceSocket;
+    const invalidate = () => {
+      if (last !== undefined && isCurrent()) grant.invalidate?.(last);
+      last = undefined;
+    };
+    socketAuth = {
+      auth: async ({ reason }) => {
+        if (!isCurrent()) throw new Error('workspace_changed');
+        if (reason === 'reauth') invalidate();
+        const { token } = await grant();
+        if (!isCurrent()) throw new Error('workspace_changed');
+        last = token;
+        return token;
+      },
+      onEvent: (event) => {
+        // The last reader may release the socket before the SDK calls reauth.
+        if (
+          event.type === 'closed' &&
+          event.closeCode >= 4100 &&
+          event.closeCode <= 4199
+        )
+          invalidate();
+      },
+    };
+    scope?.authByGateway.set(gatewayBaseUrl, socketAuth);
+  }
   return {
     enabled: true,
     url: gatewayBaseUrl,
-    authPoolKey: `lody-mobile:${workspace}`,
-    auth: async ({ reason }) => {
-      // `reauth` follows a server 4100–4199 close: the cached grant was refused.
-      if (reason === 'reauth') getGrant.invalidate?.(last);
-      last = (await getGrant()).token;
-      return last;
-    },
+    authPoolKey: `lody-mobile:${workspace}:${scope?.generation ?? 0}`,
+    ...socketAuth,
   };
 }
 
@@ -119,7 +164,10 @@ export function createTailReader(
   let subscription: LiveSubscription | undefined;
   let stop: (() => void) | undefined;
   let expected: string | undefined;
-  let pending: Promise<IteratorResult<LiveEvent>> | undefined;
+  let joinedOffset: string | undefined;
+  let pulling = false;
+  let buffered: IteratorResult<LiveEvent> | undefined;
+  let waiting: ((value: Next) => void) | undefined;
   let reportedTail = false;
   let wsOffUntil = 0;
   let failures = 0;
@@ -128,13 +176,12 @@ export function createTailReader(
     wsOffUntil = now() + cooldownMs * Math.min(20, 2 ** failures++);
   };
 
-  // Ends the read waiting on the subscription, with its idle timer.
-  let interrupt: (() => void) | undefined;
   const close = () => {
-    interrupt?.();
+    waiting?.('aborted');
     stop?.();
     void subscription?.return?.().catch(() => {});
-    subscription = stop = expected = pending = undefined;
+    subscription = stop = expected = joinedOffset = buffered = undefined;
+    pulling = false;
     reportedTail = false;
   };
   const longPoll = (input: TailRead) =>
@@ -162,15 +209,23 @@ export function createTailReader(
       mode: 'ws',
       signal: controller.signal,
       webSocket,
+      onJoined: ({ nextOffset }) => {
+        if (!controller.signal.aborted) joinedOffset = nextOffset;
+      },
     });
     expected = input.offset;
   };
-  // An idle or aborted wait keeps the outstanding `next()` for the next read.
+  // Keep the outstanding pull and its result across an idle return.
   const nextEvent = (signal: AbortSignal) => {
-    const current = (pending ??= subscription!.next());
+    if (signal.aborted) return Promise.resolve<Next>('aborted');
+    if (buffered) {
+      const event = buffered;
+      buffered = undefined;
+      return Promise.resolve(event);
+    }
     return new Promise<Next>((resolve) => {
       const finish = (value: Next) => {
-        if (interrupt === abort) interrupt = undefined;
+        waiting = undefined;
         clearTimeout(timer);
         signal.removeEventListener('abort', abort);
         resolve(value);
@@ -178,17 +233,19 @@ export function createTailReader(
       const timer = setTimeout(() => finish('idle'), idleMs);
       const abort = () => finish('aborted');
       signal.addEventListener('abort', abort, { once: true });
-      interrupt = abort;
-      current.then(
-        (value) => {
-          if (pending === current) pending = undefined;
-          finish(value);
-        },
-        () => {
-          if (pending === current) pending = undefined;
-          finish({ done: true, value: undefined });
-        },
-      );
+      waiting = finish;
+      if (pulling) return;
+      pulling = true;
+      const current = subscription!;
+      const deliver = (event: IteratorResult<LiveEvent>) => {
+        if (subscription !== current) return;
+        pulling = false;
+        if (waiting) waiting(event);
+        else buffered = event;
+      };
+      current
+        .next()
+        .then(deliver, () => deliver({ done: true, value: undefined }));
     });
   };
 
@@ -219,7 +276,6 @@ export function createTailReader(
       if (upToDate && !closed) {
         expected = nextOffset;
         reportedTail = true;
-        failures = 0;
       } else close();
       return {
         ok: true,
@@ -243,17 +299,23 @@ export function createTailReader(
     };
     for (;;) {
       const next = await nextEvent(input.signal);
-      if (next === 'aborted') {
+      if (next === 'aborted' || input.signal.aborted) {
         close();
-        return longPoll(input);
+        const signal = input.signal.aborted
+          ? input.signal
+          : AbortSignal.abort();
+        return longPoll({ ...input, signal });
       }
       if (next === 'idle') {
-        if (!chunks.length) return window(true);
+        if (!chunks.length && reportedTail) return window(true);
         return partial(input);
       }
       if (next.done) return partial(input);
       const event = next.value;
       if (event.type === 'data') {
+        // The SDK resolves start/tail sentinels to a concrete batch start.
+        if (!reportedTail && !chunks.length && joinedOffset)
+          nextOffset = joinedOffset;
         chunks.push(event.payload.body);
         received += event.payload.body.length;
         contentType = event.payload.contentType;
@@ -271,6 +333,7 @@ export function createTailReader(
         }
       } else if (event.type === 'up_to_date') {
         nextOffset = event.nextOffset;
+        failures = 0;
         if (event.cursor !== undefined) cursor = event.cursor;
         // A checkpoint at an already reported tail carries nothing new.
         if (!chunks.length && reportedTail && nextOffset === input.offset)

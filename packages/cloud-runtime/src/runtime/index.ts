@@ -750,15 +750,13 @@ function watch(mode: string) {
           const response = await retrySessionRead(
             signal,
             async () => {
-              const result = !livePoll
-                ? await client.readOnce({ offset, cursor, signal })
-                : reader
-                  ? await reader.read({ offset, cursor, signal })
+              const read = { offset, cursor, signal };
+              const result =
+                livePoll && reader
+                  ? await reader.read(read)
                   : await client.readOnce({
-                      offset,
-                      cursor,
-                      signal,
-                      live: 'long-poll',
+                      ...read,
+                      ...(livePoll ? { live: 'long-poll' as const } : {}),
                     });
               if (!result.ok) {
                 const error = result.result;

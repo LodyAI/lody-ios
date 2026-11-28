@@ -48,8 +48,10 @@ workspace Streams grant, carries:
   server reports the frame not executed; an unacknowledged socket append is an
   unknown outcome and is not replayed.
 
-A server `reauth` close invalidates the cached grant first. Bootstrap, catch-up,
-stream creation and every other request stay on HTTP.
+The socket renews its grant for the active workspace even after the RPC that
+opened it ends. A server auth close invalidates the refused grant before the
+read falls back to HTTP. Bootstrap, catch-up, stream creation and every other
+request stay on HTTP.
 
 `createTailReader` returns each up-to-date checkpoint in the shape of a
 `readOnce({live: 'long-poll'})` result (JSON streams as one JSON array, as HTTP
