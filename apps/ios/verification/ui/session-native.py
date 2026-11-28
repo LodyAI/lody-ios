@@ -76,8 +76,7 @@ def check_archive():
     wait_probe('live', 'Archive failure scenario did not start')
     tap_label(more)
     tap_label(catalog.text('session.action.archive'), post_delay='0')
-    ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('session.toast.archiveFailed') for i in items),
-            'Missing archive failure')
+    # The session-info-bar native check verifies the scoped failure callback after the pop.
     ui.wait(lambda items: not any(i.get('AXUniqueId') == 'session-preview-probe' for i in items),
             'Failed archive did not return immediately')
     ui.capture('archive-failure-return')

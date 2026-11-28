@@ -146,6 +146,10 @@ for files in checks.values():
                            'Chat/ChatCarriedPlan.swift', 'Chat/ChatMessageQuote.swift']:
             if dependency not in files:
                 files.append(dependency)
+    if 'Chat/ChatCell.swift' in files:
+        for dependency in ['Chat/ChatAuthorHeader.swift', 'List/LodyListPhoto.swift', 'List/PhotoDiskCache.swift']:
+            if dependency not in files:
+                files.append(dependency)
     if 'Chat/ChatSendHandoff.swift' in files and 'Chat/ChatReferenceNode.swift' not in files:
         files.append('Chat/ChatReferenceNode.swift')
     if 'LodyUIVerify.swift' not in files and ('Chat/ChatSendHandoff.swift' in files or 'Chat/ChatMentionPanel.swift' in files):
