@@ -43,9 +43,11 @@ def open_url(path):
 
 
 def session(title):
-    stack(['index', 'presented/[presentationId]'])
-    ui.element('session-input')
-    ui.wait(lambda items: any(title in (i.get('AXLabel') or '') for i in items), f'Missing session title {title}')
+    def matches(items):
+        has_input = any(i.get('AXUniqueId') == 'session-input' for i in items)
+        has_title = any(i.get('AXUniqueId') == 'chat-navigation-title' and title in (i.get('AXLabel') or '') for i in items)
+        return has_input and has_title
+    ui.wait(matches, f'Missing session titled {title} above Home')
 
 
 embedded = bool(os.environ.get('LODY_UI_NATIVE'))
@@ -186,21 +188,24 @@ ui.capture('detail-returned')
 # The header dot announces unseen output in other Tabs. Working status belongs
 # to each row in the expanded panel, even after all background output is viewed.
 unread = catalog.text('session.relations.unread')
-assert ui.element('chat-directory-tabs').get('AXValue') == unread
-ui.axe('tap', '--id', 'chat-directory-tabs', '--post-delay', '.3')
-ui.element('tab:ui-history-tab')
+tabs = ui.element('chat-directory-tabs')
+assert tabs.get('AXValue') == unread
+ui.tap_frame(tabs['frame'], post_delay='.3')
+history_tab = ui.element('tab:ui-history-tab')
 ui.element('tab:ui-unread-tab')
 ui.capture('tab-panel-working-and-unread')
-ui.axe('tap', '--id', 'tab:ui-history-tab', '--post-delay', '.3')
+ui.tap_frame(history_tab['frame'], post_delay='.3')
 session('Waiting for tab history')
-assert ui.element('chat-directory-tabs').get('AXValue') == unread
+tabs = ui.element('chat-directory-tabs')
+assert tabs.get('AXValue') == unread
 ui.capture('tab-background-unread')
-ui.axe('tap', '--id', 'chat-directory-tabs', '--post-delay', '.3')
-ui.axe('tap', '--id', 'tab:ui-unread-tab', '--post-delay', '.3')
+ui.tap_frame(tabs['frame'], post_delay='.3')
+ui.tap_frame(ui.element('tab:ui-unread-tab')['frame'], post_delay='.3')
 session('Unread tab output')
-assert not ui.element('chat-directory-tabs').get('AXValue'), 'The selected Tab must not light the header dot'
-ui.axe('tap', '--id', 'chat-directory-tabs', '--post-delay', '.3')
-ui.axe('tap', '--id', 'tab:ui-design', '--post-delay', '.3')
+tabs = ui.element('chat-directory-tabs')
+assert not tabs.get('AXValue'), 'The selected Tab must not light the header dot'
+ui.tap_frame(tabs['frame'], post_delay='.3')
+ui.tap_frame(ui.element('tab:ui-design')['frame'], post_delay='.3')
 session('首页交互设计')
 assert not ui.element('chat-directory-tabs').get('AXValue'), 'Local viewing must clear the dot while the other Tab is still working'
 ui.capture('tab-working-without-unread-dot')

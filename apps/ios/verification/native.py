@@ -6,7 +6,7 @@ import platform
 import subprocess
 import sys
 import tempfile
-from simulator import run_with_simulator, SimulatorPool
+from simulator import run_simulator_test, run_with_simulator, SimulatorPool
 
 root = Path(__file__).resolve().parents[3]
 kit = root / 'packages/LodyKit'
@@ -312,7 +312,6 @@ with tempfile.TemporaryDirectory(prefix='lody-native-verify-') as output:
         # Xcode 27 CI compiles the larger chat/composer graphs much slower than a local Mac.
         subprocess.run(command, check=True, timeout=240)
         # A cold CI Simulator draws its first text far slower than a warm local one.
-        command = ['xcrun', 'simctl', 'spawn', args.udid, binary] if simulator else [binary]
         if name == 'simulator-transport':
             subprocess.run(['codesign', '--force', '--sign', '-', binary], check=True)
             with subprocess.Popen(['node', str(checks_root / 'simulator-transport/server.mjs')], stdout=subprocess.PIPE, text=True) as server:
@@ -320,12 +319,13 @@ with tempfile.TemporaryDirectory(prefix='lody-native-verify-') as output:
                     endpoint = server.stdout.readline().strip()
                     if not endpoint.startswith('http://127.0.0.1:'):
                         raise RuntimeError('Simulator transport fixture server did not start')
-                    subprocess.run(command, check=True, timeout=90, env={**os.environ, 'SIMCTL_CHILD_LODY_SIMULATOR_TEST_URL': endpoint,
-                                                                       'SIMCTL_CHILD_OS_ACTIVITY_DT_MODE': 'enable'})
+                    run_simulator_test(args.udid, binary, timeout=90,
+                                       env={**os.environ, 'SIMCTL_CHILD_LODY_SIMULATOR_TEST_URL': endpoint,
+                                            'SIMCTL_CHILD_OS_ACTIVITY_DT_MODE': 'enable'})
                 finally:
                     server.terminate()
         elif name == 'auth':
-            subprocess.run(command, check=True, timeout=60)
+            subprocess.run([binary], check=True, timeout=60)
             # Exercise the real build-owned Bundle configuration, not a policy stub.
             import plistlib
             import shutil
@@ -343,14 +343,15 @@ with tempfile.TemporaryDirectory(prefix='lody-native-verify-') as output:
             resources.mkdir()
             subprocess.run(['xcrun', 'xcstringstool', 'compile', str(kit / 'Sources/LodyKit/Resources/Localizable.xcstrings'),
                             '--output-directory', str(resources)], check=True)
-            subprocess.run([*command, str(resources)], check=True, timeout=60)
+            subprocess.run([binary, str(resources)], check=True, timeout=60)
         elif name == 'attachments':
-            command += ['--ui-verify']
             with subprocess.Popen([sys.executable, str(checks_root / 'attachments/progress-server.py')], stdout=subprocess.PIPE, text=True) as server:
                 try:
                     endpoint = server.stdout.readline().strip()
-                    subprocess.run(command, check=True, timeout=300, env={**os.environ, 'SIMCTL_CHILD_LODY_UPLOAD_TEST_URL': endpoint})
+                    run_simulator_test(args.udid, binary, '--ui-verify', env={**os.environ, 'SIMCTL_CHILD_LODY_UPLOAD_TEST_URL': endpoint})
                 finally:
                     server.terminate()
+        elif simulator:
+            run_simulator_test(args.udid, binary)
         else:
-            subprocess.run(command, check=True, timeout=300)
+            subprocess.run([binary], check=True, timeout=300)

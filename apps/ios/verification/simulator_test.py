@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).with_name('simulator.py')
@@ -94,6 +95,39 @@ class FakeSimctl:
                 if device['udid'] == udid:
                     return device
         raise AssertionError(f'Unknown fake device: {udid}')
+
+
+class SimulatorTestProcessTests(unittest.TestCase):
+    def test_lost_boot_session_reboots_the_same_device_and_retries_once(self):
+        simulator = load_simulator_module()
+        command = ['xcrun', 'simctl', 'spawn', 'TEST-DEVICE', '/tmp/native-check', '--ui-verify']
+        lost_device = subprocess.CompletedProcess(
+            command, 149, stderr='Process spawn via launchd failed because device is not booted.\n',
+        )
+        environment = {'SIMCTL_CHILD_FIXTURE': 'value'}
+        with (
+            patch.object(simulator.subprocess, 'run', side_effect=[lost_device, subprocess.CompletedProcess(command, 0)]) as run,
+            patch.object(simulator, 'run_simctl') as simctl,
+            patch.object(sys, 'stderr'),
+        ):
+            simulator.run_simulator_test('TEST-DEVICE', '/tmp/native-check', '--ui-verify', timeout=90, env=environment)
+        simctl.assert_called_once_with('bootstatus', 'TEST-DEVICE', '-b', timeout=300)
+        self.assertEqual([call.args[0] for call in run.call_args_list], [command, command])
+        self.assertTrue(all(call.kwargs['timeout'] == 90 and call.kwargs['env'] == environment for call in run.call_args_list))
+        self.assertTrue(run.call_args.kwargs['check'])
+
+    def test_native_assertion_failure_is_reported_without_retry(self):
+        simulator = load_simulator_module()
+        failure = subprocess.CompletedProcess(['native-check'], 1, stderr='Assertion failed: required view is missing\n')
+        with (
+            patch.object(simulator.subprocess, 'run', return_value=failure) as run,
+            patch.object(simulator, 'run_simctl') as simctl,
+            patch.object(sys, 'stderr'),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                simulator.run_simulator_test('TEST-DEVICE', '/tmp/native-check')
+        run.assert_called_once()
+        simctl.assert_not_called()
 
 
 class ReusableDeviceTests(unittest.TestCase):

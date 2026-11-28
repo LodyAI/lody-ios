@@ -668,8 +668,8 @@ try:
                     # toggles eats the rest of a 300s budget.
                     check_timeout = 480
                 elif case == 'navigation':
-                    # Three cold relaunches plus catalog links; 360s still dies on a cold CI AXe session.
-                    check_timeout = 480
+                    # Cold relaunches, catalog links, interactive pop and conversation tabs on CI.
+                    check_timeout = 600
                 elif case == 'home':
                     # Create, Debug, Settings and workspace editing share this case; ~540s alone on the native inbox.
                     check_timeout = 600

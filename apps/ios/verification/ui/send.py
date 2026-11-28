@@ -6,6 +6,16 @@ import catalog
 from send_motion import ThrowTrace
 ui = UI(*sys.argv[1:])
 trace = ThrowTrace(ui)
+
+
+def failure_alert():
+    def visible(items):
+        if any(i.get('AXLabel') == catalog.text('send.alert.title') for i in items):
+            return next((i for i in items if i.get('type') == 'Button' and i.get('AXLabel') == catalog.system('ok')), None)
+        return None
+    return ui.wait(visible, 'Failure alert is missing its OK button')
+
+
 def pending_actions(calls):
     ui.axe('tap', '--id', 'stale-pending:delivery')
     ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('send.recover.action') for i in items), 'Pending-input actions missing')
@@ -66,10 +76,10 @@ except AssertionError:
     ui.axe('tap', '--id', 'send-connect')
     ui.wait(sending, 'Connected send did not start')
 ui.axe('tap', '--id', 'send-fail')
-ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('send.alert.title') for i in items), 'Failure alert missing')
+ok = failure_alert()
 assert any(i.get('AXLabel') == catalog.text('send.error.freeTurnLimit') for i in ui.state()), 'Free turn limit explanation missing'
 ui.capture('turn-limit-alert')
-ui.axe('tap', '--label', catalog.system('ok'))
+ui.tap_frame(ok['frame'])
 assert not ui.element('session-input').get('AXValue'), 'Failed text jumped back into input'
 assert ui.element(turn + ':user-text')['AXLabel'] == draft
 ui.element(turn + ':attachment:fixture-file')
@@ -94,8 +104,7 @@ ui.axe('tap', '--id', 'session-send', '--post-delay', '1')
 ui.wait(lambda items: any(i.get('AXLabel') == 'Calls: 3 · sending' for i in items), 'Next send missing')
 ui.type_into('session-input', 'third next draft')
 ui.axe('tap', '--id', 'send-fail')
-ui.wait(lambda items: any(i.get('AXLabel') == catalog.text('send.alert.title') for i in items), 'Failure alert missing')
-ui.axe('tap', '--label', catalog.system('ok'))
+ui.tap_frame(failure_alert()['frame'])
 assert (ui.element('session-input').get('AXValue') or '').casefold() == 'third next draft', 'Failure overwrote new input'
 assert ui.element('session-send')['enabled'], 'A definite failure must allow a fresh message'
 ui.capture('new-draft-preserved')
