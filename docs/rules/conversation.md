@@ -38,7 +38,7 @@ Read before changing the conversation page: the transcript and its turns, header
 
 - The conversation header has no PR button or historical PR menu. PR navigation stays in the context capsule above the composer.
 
-- A GitHub PR link in conversation text (`Chat/ChatPullRequestLink`) opens the native PR page instead of the browser when its repository belongs to the session's project, compared case-insensitively: the project's repository, or any GitHub member of a multi-repository project (catalog `Project.repositories`, from the session's `projectRun`). Other links still open in the browser.
+- Any valid GitHub PR link in conversation text (`Chat/ChatPullRequestLink`) opens the native PR page directly for the URL's `owner/repo` and number, including cross-repository PRs and conversations without a repository binding; viewing a PR does not bind it to the session, and GitHub authorization remains enforced by the PR page. Non-PR links still open in the browser.
 
 - Conversation changed files never expand inline: the files row keeps file count and line totals and opens `TurnFilesController` (titled with the file count). Keep the tasks row, files row and final model/time footer ordering when changing this output card.
 
