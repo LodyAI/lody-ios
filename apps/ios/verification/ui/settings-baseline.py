@@ -59,6 +59,8 @@ for index, scenario in enumerate(scenarios):
     account = ui.element('account')
     preferences = ui.element('preferences')
     assert account['frame']['y'] < preferences['frame']['y']
+    assert preferences['AXLabel'] == catalog.text('settings.preferences.title'), preferences
+    assert preferences['frame']['height'] >= 44
     expected_name = 'Settings Preview' if signed_in else catalog.text('settings.account.welcome')
     assert expected_name in account.get('AXLabel', ''), account
     assert account['frame']['height'] >= 44
@@ -68,6 +70,11 @@ for index, scenario in enumerate(scenarios):
     assert not {'notifications', 'queued-message-behavior', 'accent-color', 'app-icon'} & top
     ui.capture(f'{scenario}-top')
     if scenario == 'live':
+        general = ui.element('workspace-general')
+        agent = ui.element('remote-agent')
+        assert general['AXLabel'] == catalog.text('settings.workspace.general'), general
+        assert abs(preferences['frame']['height'] - agent['frame']['height']) < 1, (preferences, agent)
+        assert abs(general['frame']['height'] - agent['frame']['height']) < 1, (general, agent)
         flat_rows.assert_chat_rows(ui, 'live-chat-rows', 'remote-agent', 'agent-roles')
         flat_rows.assert_section_gap(ui, 'preferences', 'workspace-general')
 

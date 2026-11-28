@@ -15,8 +15,11 @@ def tap_label(label):
 def open_general():
     tap_label(settings)
     row = ui.element('workspace-general')
+    agent = ui.element('remote-agent')
+    assert row['AXLabel'] == catalog.text('settings.workspace.general'), row
     assert row['frame']['height'] >= 44
-    assert row['frame']['y'] < ui.element('remote-agent')['frame']['y']
+    assert abs(row['frame']['height'] - agent['frame']['height']) < 1, (row, agent)
+    assert row['frame']['y'] < agent['frame']['y']
     ui.capture('settings-general-entry')
     ui.axe('tap', '--id', 'workspace-general', '--post-delay', '.6')
     return ui.element('workspace-name')

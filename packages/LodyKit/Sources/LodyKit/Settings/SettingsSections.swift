@@ -7,7 +7,7 @@ enum SettingsSections {
     var sections = [
       section("account", rows: [accountRow(account)]),
       section("personal", header: text("section.personal"), rows: [
-        row("preferences", text("preferences.title"), subtitle: text("preferences.subtitle"), image: "slider.horizontal.3"),
+        row("preferences", text("preferences.title"), image: "slider.horizontal.3"),
       ]),
     ]
     if account != nil {
@@ -37,7 +37,7 @@ enum SettingsSections {
       unavailable.disclosure = false
       return section("remote", header: text("section.workspace"), rows: [unavailable])
     }
-    var general = row("workspace-general", text("workspace.general"), subtitle: text("workspace.generalSubtitle"), image: "building.2")
+    var general = row("workspace-general", text("workspace.general"), image: "building.2")
     general.navigates = false
     var rows = [
       general,

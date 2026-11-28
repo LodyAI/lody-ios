@@ -23,6 +23,13 @@ assert not any(i.get('AXUniqueId') == 'permission-native-preview' for i in ui.st
 
 
 ui.capture('settings')
+preferences = ui.element('preferences')
+general = ui.element('workspace-general')
+agent = ui.element('remote-agent')
+assert preferences['AXLabel'] == catalog.text('settings.preferences.title'), preferences
+assert general['AXLabel'] == catalog.text('settings.workspace.general'), general
+assert abs(preferences['frame']['height'] - agent['frame']['height']) < 1, (preferences, agent)
+assert abs(general['frame']['height'] - agent['frame']['height']) < 1, (general, agent)
 ui.axe('tap', '--id', 'preferences')
 ui.element('app-icon')
 ui.capture('preferences')
