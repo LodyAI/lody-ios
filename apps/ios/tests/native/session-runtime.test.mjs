@@ -1180,8 +1180,18 @@ test('a failed Loro recovery remains explicitly retryable without resending hist
   }
 });
 
-test('Loro recovery requires server evidence, not an uncommitted local turn', async () => {
-  const fixture = await openTestSession({ failAppend: () => true });
+test('Loro staging fork isolates failed appends and recovery returns not_saved to unlock safe retry', async () => {
+  let fail = true;
+  const dispatched = [];
+  const fixture = await openTestSession({
+    failAppend: () => fail,
+    markDispatch: async (_sessionId, turnId) => {
+      dispatched.push(turnId);
+    },
+    onRpc: async () => ({
+      result: { accepted: true, disposition: 'accepted' },
+    }),
+  });
   try {
     const sent = await fixture.runtime.sendTurn({
       id: '00000000-0000-4000-8000-000000000003',
@@ -1193,18 +1203,369 @@ test('Loro recovery requires server evidence, not an uncommitted local turn', as
       text: 'Synthetic local only',
     });
     assert.equal(sent.state, 'unknown');
-    assert.equal(fixture.runtime.sessionDoc('s1').toJSON().history.length, 1);
-    await assert.rejects(
-      fixture.runtime.actOnPendingInput('s1', sent.id, 'retry', () => ({
+    // Failed append must never pollute live state.doc.
+    assert.equal(
+      fixture.runtime.sessionDoc('s1').toJSON().history?.length ?? 0,
+      0,
+    );
+    // Before authoritative reconciliation, duplicate sendTurn still fences replay.
+    const blocked = await fixture.runtime.sendTurn({
+      id: sent.id,
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'Synthetic local only',
+    });
+    assert.equal(blocked.state, 'unknown');
+    assert.equal(blocked.reason, 'turn_already_exists');
+    // Authoritative server check proves the write never landed.
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput('s1', sent.id, 'retry', () => ({
         userId: 'u1',
         machineId: 'm1',
       })),
-      /input_not_confirmed/,
+      { state: 'not_saved' },
     );
     assert.equal(fixture.server.toJSON().history?.length ?? 0, 0);
     assert.equal(
       fixture.appends.filter((url) => url.includes(':rpc:')).length,
       0,
+    );
+    // Once reconciled as not_saved, explicit retry with the same id succeeds cleanly.
+    fail = false;
+    const retried = await fixture.runtime.sendTurn({
+      id: sent.id,
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'Synthetic local only',
+    });
+    assert.equal(retried.state, 'accepted');
+    assert.deepEqual(dispatched, [sent.id]);
+    assert.equal(fixture.server.toJSON().history.length, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('Loro sendTurn completes durable handoff when computer RPC fails and recoverLoroInput repairs latestUserMsgId with newer-pointer guard', async () => {
+  const dispatches = [];
+  let failMark = false;
+  let failRpc = true;
+  const fixture = await openTestSession({
+    markDispatch: async (sessionId, turnId, queued = false) => {
+      if (failMark) throw new Error('meta_offline');
+      dispatches.push({ sessionId, turnId, queued });
+    },
+    onRpc: async () => {
+      if (failRpc) throw new Error('machine_sleeping');
+      return { result: { accepted: true, disposition: 'accepted' } };
+    },
+  });
+  try {
+    // 1. Durable handoff (:s:<id> + :meta) succeeds even while computer RPC fails.
+    const first = await fixture.runtime.sendTurn({
+      id: '00000000-0000-4000-8000-000000000011',
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'Offline computer turn',
+    });
+    assert.deepEqual(first, {
+      id: '00000000-0000-4000-8000-000000000011',
+      state: 'accepted',
+      rpcAccepted: false,
+    });
+    assert.deepEqual(dispatches, [
+      { sessionId: 's1', turnId: first.id, queued: false },
+    ]);
+
+    // 2. When markDispatch fails during sendTurn, recoverLoroInput repairs :meta.latestUserMsgId
+    //    and succeeds even while the computer is still offline.
+    fixture.server.getList('history').get(0).set('status', 'handled');
+    fixture.server.commit();
+    await fixture.pushUpdate();
+    failMark = true;
+    const second = await fixture.runtime.sendTurn({
+      id: '00000000-0000-4000-8000-000000000012',
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'Needs meta pointer repair',
+    });
+    assert.equal(second.state, 'uploaded');
+    failMark = false;
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput('s1', second.id, 'retry', () => ({
+        userId: 'u1',
+        machineId: 'm1',
+        latestUserMsgId: first.id,
+      })),
+      { state: 'accepted' },
+    );
+    assert.deepEqual(dispatches.at(-1), {
+      sessionId: 's1',
+      turnId: second.id,
+      queued: false,
+    });
+
+    // 3. Never rewrite a newer latestUserMsgId pointer backwards.
+    fixture.runtime.appendUserTurn(
+      fixture.server,
+      '00000000-0000-4000-8000-000000000013',
+      'Newer turn',
+      'u1',
+      { prompt: 'Newer turn' },
+      '2026-01-02',
+    );
+    const beforeCount = dispatches.length;
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput('s1', second.id, 'retry', () => ({
+        userId: 'u1',
+        machineId: 'm1',
+        latestUserMsgId: '00000000-0000-4000-8000-000000000013',
+      })),
+      { state: 'accepted' },
+    );
+    assert.equal(
+      dispatches.length,
+      beforeCount,
+      'recovery must not overwrite a newer latestUserMsgId pointer',
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test('Loro queue staging fork isolates failed appends and recovers dynamic mq entries as queued', async () => {
+  const dispatches = [];
+  let failAppend = true;
+  let failMark = false;
+  const fixture = await openTestSession({
+    seedServer(doc) {
+      doc.getList('history').push({
+        id: 'running-assistant',
+        role: 'assistant',
+        finished: false,
+        items: [],
+      });
+      doc.commit();
+    },
+    failAppend: () => failAppend,
+    markDispatch: async (sessionId, turnId, queued = false) => {
+      if (failMark) throw new Error('meta_offline');
+      dispatches.push({ sessionId, turnId, queued });
+    },
+  });
+  try {
+    // Failed queue append must not pollute state.doc.mq.
+    const failedQueue = await fixture.runtime.sendTurn({
+      id: '00000000-0000-4000-8000-000000000021',
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'Dynamic queue failure',
+      queue: false,
+    });
+    assert.equal(failedQueue.state, 'unknown');
+    assert.equal(fixture.runtime.sessionDoc('s1').toJSON().mq?.length ?? 0, 0);
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput(
+        's1',
+        failedQueue.id,
+        'retry',
+        () => ({ userId: 'u1', machineId: 'm1' }),
+      ),
+      { state: 'not_saved' },
+    );
+
+    // Retry succeeds append to mq, but markDispatch fails -> uploaded -> recovery bumps mq dispatch and returns queued.
+    failAppend = false;
+    failMark = true;
+    const uploadedQueue = await fixture.runtime.sendTurn({
+      id: failedQueue.id,
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'Dynamic queue failure',
+      queue: false,
+    });
+    assert.equal(uploadedQueue.state, 'uploaded');
+    failMark = false;
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput(
+        's1',
+        failedQueue.id,
+        'retry',
+        () => ({ userId: 'u1', machineId: 'm1' }),
+      ),
+      { state: 'queued' },
+    );
+    assert.deepEqual(dispatches, [
+      { sessionId: 's1', turnId: failedQueue.id, queued: true },
+    ]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('Loro recovery falls back to bootstrap when incremental cursor expires and sendTurn honors pre-write abort signal', async () => {
+  let bootstraps = 0;
+  let expiredOnce = false;
+  const fixture = await openTestSession({
+    beforeBootstrap: async () => {
+      bootstraps++;
+    },
+    readCatchup: async () => {
+      if (!expiredOnce) {
+        expiredOnce = true;
+        return { ok: false, result: { code: 'invalid_cursor' } };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const initialBootstraps = bootstraps;
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput(
+        's1',
+        '00000000-0000-4000-8000-000000000031',
+        'retry',
+        () => ({ userId: 'u1', machineId: 'm1' }),
+      ),
+      { state: 'not_saved' },
+    );
+    assert.ok(
+      bootstraps > initialBootstraps,
+      'invalid_cursor must fall back to full bootstrap',
+    );
+
+    // Pre-write abort signal cleanly returns not_sent and releases state.sending.
+    const abort = new AbortController();
+    const pendingSend = fixture.runtime.sendTurn(
+      {
+        id: '00000000-0000-4000-8000-000000000032',
+        sessionId: 's1',
+        machineId: 'm1',
+        userId: 'u1',
+        cliType: 'builtin',
+        agentType: 'claude',
+        text: 'Aborted before write',
+      },
+      async () => new Promise(() => {}),
+      undefined,
+      abort.signal,
+    );
+    abort.abort(new Error('timeout'));
+    const abortedResult = await pendingSend;
+    assert.equal(abortedResult.state, 'not_sent');
+    assert.equal(abortedResult.reason, 'send_timeout');
+    assert.equal(fixture.appends.length, 0);
+    // Session is no longer locked after pre-write abort.
+    const followUp = await fixture.runtime.sendTurn({
+      id: '00000000-0000-4000-8000-000000000033',
+      sessionId: 's1',
+      machineId: 'm1',
+      userId: 'u1',
+      cliType: 'builtin',
+      agentType: 'claude',
+      text: 'After abort',
+    });
+    assert.equal(followUp.state, 'accepted');
+  } finally {
+    fixture.close();
+  }
+});
+
+test('Roost recovery without acceptedInputs reconciles via inputAcceptance.lookup and control mq', async () => {
+  let lookupStatus = 'unobserved';
+  const fixture = await openTestSession({
+    target: {
+      backend: 'roost',
+      machineId: 'm1',
+      acceptsInput: true,
+      dispatchesInput: true,
+    },
+    async onRpc(request, runtime) {
+      const params = await runtime.openPayload(request.params);
+      if (params.query?.kind === 'inputAcceptance') {
+        return {
+          result: await runtime.sealPayload('s1', {
+            type: 'session/history-read_response',
+            sessionId: 's1',
+            success: true,
+            historyRevision: 1,
+            historyCount: 0,
+            result:
+              lookupStatus === 'accepted'
+                ? {
+                    status: 'accepted',
+                    turnId: params.query.entry.id,
+                    active: true,
+                  }
+                : { status: 'unobserved' },
+          }),
+        };
+      }
+      if (params.query?.kind === 'readTurn') {
+        return {
+          result: await runtime.sealPayload('s1', {
+            type: 'session/history-read_response',
+            sessionId: 's1',
+            success: true,
+            historyRevision: 1,
+            historyCount: 0,
+            result: { state: 'missing' },
+          }),
+        };
+      }
+      return {
+        result: await runtime.sealPayload('s1', {
+          type: 'session/history-read_response',
+          sessionId: 's1',
+          success: true,
+          historyRevision: 1,
+          historyCount: 0,
+          result: {
+            checkpoint: 'c1',
+            startPosition: 0,
+            totalCount: 0,
+            rows: [],
+            hasMoreOlder: false,
+            cursor: null,
+          },
+          pageTurns: [],
+        }),
+      };
+    },
+  });
+  try {
+    const missingId = '00000000-0000-4000-8000-000000000041';
+    const target = () => ({
+      userId: 'u1',
+      machineId: 'm1',
+      historyBackend: 'roost',
+    });
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput('s1', missingId, 'retry', target),
+      { state: 'not_saved' },
+    );
+    lookupStatus = 'accepted';
+    assert.deepEqual(
+      await fixture.runtime.actOnPendingInput('s1', missingId, 'retry', target),
+      { state: 'accepted' },
     );
   } finally {
     fixture.close();
@@ -1356,10 +1717,13 @@ test('the recovery handler uses current metadata and fences account or machine c
       });
       recovering = true;
       const result = retry();
-      const rejected = assert.rejects(
-        result,
-        /workspace_changed|input_already_terminal|session_not_ready/,
-      );
+      const outcome =
+        change === 'missing-history'
+          ? result
+          : assert.rejects(
+              result,
+              /workspace_changed|input_already_terminal|session_not_ready/,
+            );
       await started;
       if (change === 'account') state.userId = 'u2';
       if (change === 'machine')
@@ -1371,7 +1735,9 @@ test('the recovery handler uses current metadata and fences account or machine c
       if (change === 'archive')
         flock.set(['m', 'session-s1', 'isArchived'], true);
       releaseRead();
-      await rejected;
+      if (change === 'missing-history')
+        assert.deepEqual(await outcome, { state: 'terminal' });
+      else await outcome;
     }
     assert.equal(
       fixture.appends.length,

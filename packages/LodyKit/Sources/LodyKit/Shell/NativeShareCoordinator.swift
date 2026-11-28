@@ -103,14 +103,11 @@ final class NativeShareCoordinator {
         guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
         try? ShareStore.writePrefs(prefs)
       }
-      for project in [nil] + projects.prefix(10).map({ Optional($0.id) }) {
+      do {
+        let options = try await CreateSessionService.live.options(state.workspaceId, nil)
         guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
-        do {
-          let options = try await CreateSessionService.live.options(state.workspaceId, project)
-          guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
-          try ShareStore.writeOptions(options, target: project ?? "chat")
-        } catch { self?.report(error, operation: "options") }
-      }
+        try ShareStore.writeOptions(options, target: "chat")
+      } catch { self?.report(error, operation: "options") }
       guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
       do {
         let roles = try await CreateSessionService.live.roles(state.workspaceId)
@@ -123,6 +120,14 @@ final class NativeShareCoordinator {
         guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
         try ShareStore.writeProjectGroups(groups, userId: state.userId, workspaceId: state.workspaceId)
       } catch { self?.report(error, operation: "groups") }
+      for project in projects.prefix(10) {
+        guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
+        do {
+          let options = try await CreateSessionService.live.options(state.workspaceId, project.id)
+          guard !Task.isCancelled, SessionSource.live.state.key == state.key, workspaceMode(state.workspaceId) == .plaintext else { return }
+          try ShareStore.writeOptions(options, target: project.id)
+        } catch { self?.report(error, operation: "options") }
+      }
     }
   }
 

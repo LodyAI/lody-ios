@@ -382,7 +382,7 @@ export const runtimeCalls = {
   sendTurn: {
     params: SendTurnParams,
     result: SendTurnResult,
-    timeoutMs: 45_000,
+    timeoutMs: 90_000,
   },
   forkSession: {
     params: ForkSessionParams,
@@ -397,7 +397,7 @@ export const runtimeCalls = {
   retryPendingInput: {
     params: ForgetPendingInputParams,
     result: RetryPendingInputResult,
-    timeoutMs: 30_000,
+    timeoutMs: 60_000,
   },
   forgetPendingInput: {
     params: ForgetPendingInputParams,

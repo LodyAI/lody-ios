@@ -6779,7 +6779,10 @@ extension RuntimeContract {
   public enum RetryPendingInputResultState: String, Codable, Sendable, Equatable, CaseIterable {
     case pending = "pending"
     case accepted = "accepted"
+    case queued = "queued"
     case settled = "settled"
+    case notSaved = "not_saved"
+    case terminal = "terminal"
   }
 
   public struct RetryPendingInputResult: Codable, Sendable, Equatable {
@@ -7453,16 +7456,20 @@ extension RuntimeContract {
 
   public struct SendTurnResultAccepted: Codable, Sendable, Equatable {
     public var id: String
-    public init(id: String) {
+    public var rpcAccepted: Bool?
+    public init(id: String, rpcAccepted: Bool? = nil) {
       self.id = id
+      self.rpcAccepted = rpcAccepted
     }
     public init(from decoder: any Decoder) throws {
       let c = try decoder.container(keyedBy: Key.self)
       self.id = try c.decode(String.self, forKey: Key("id"))
+      self.rpcAccepted = try c.decodeIfPresent(Bool.self, forKey: Key("rpcAccepted"))
     }
     public func encode(to encoder: any Encoder) throws {
       var c = encoder.container(keyedBy: Key.self)
       try c.encode(self.id, forKey: Key("id"))
+      try c.encodeIfPresent(self.rpcAccepted, forKey: Key("rpcAccepted"))
     }
   }
 
@@ -9895,7 +9902,7 @@ extension RuntimeContract {
       public typealias Params = RuntimeContract.ForgetPendingInputParams
       public typealias Result = RuntimeContract.RetryPendingInputResult
       public static let method = "retryPendingInput"
-      public static let timeout: Double = 30
+      public static let timeout: Double = 60
       public static func result(_ value: RuntimeContract.CallResult) -> Result? {
         if case .retryPendingInput(let result) = value { return result }
         return nil
@@ -9935,7 +9942,7 @@ extension RuntimeContract {
       public typealias Params = RuntimeContract.SendTurnParams
       public typealias Result = RuntimeContract.SendTurnResult
       public static let method = "sendTurn"
-      public static let timeout: Double = 45
+      public static let timeout: Double = 90
       public static func result(_ value: RuntimeContract.CallResult) -> Result? {
         if case .sendTurn(let result) = value { return result }
         return nil

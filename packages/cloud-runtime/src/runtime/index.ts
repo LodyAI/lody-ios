@@ -279,6 +279,10 @@ async function markDispatch(sessionId: string, turnId: string, queued = false) {
       },
     });
     if (!result.ok) throw new Error(result.result.code);
+    if (state.metaReplica?.flock === flock) {
+      catalogs.set('meta', projectRows(flock.scan(), 'meta'));
+      publish();
+    }
   } catch (error) {
     // An unsent dispatch pointer left in the replica would read as delivered
     // and stop the owner from retrying it.

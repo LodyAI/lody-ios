@@ -13,6 +13,7 @@ struct CreateSessionService {
   var workspaceMode: (String) -> WorkspaceContentMode = { WorkspaceModePins.shared.mode($0) }
   var refreshCapability: (_ workspace: String, _ config: String) async throws -> Void = { _, _ in }
   var cachedOptions: (_ userId: String, _ workspaceId: String, _ projectId: String?) async -> CreationOptions? = { _, _, _ in nil }
+  var cachedRoles: (_ userId: String, _ workspaceId: String) async -> [RuntimeContract.AgentRoleItem]? = { _, _ in nil }
   /// Agent Roles readable by this user (runtime `agentRoles` list); none without a runtime.
   var roles: (_ workspaceId: String) async throws -> [RuntimeContract.AgentRoleItem] = { _ in [] }
   /// The workspace's multi-repository projects (runtime `projectGroups`); none without a runtime.
@@ -27,6 +28,10 @@ struct CreateSessionService {
 
   static func optionsKey(userId: String, workspaceId: String, projectId: String?) -> String {
     "creation-options:v1:" + CreateJSON.encode([userId, workspaceId, projectId ?? ""])
+  }
+
+  static func rolesKey(userId: String, workspaceId: String) -> String {
+    "creation-roles:v1:" + CreateJSON.encode([userId, workspaceId])
   }
 
   static func prefsKey(userId: String, workspaceId: String) -> String { "create:\(userId):\(workspaceId)" }
@@ -95,11 +100,31 @@ struct CreateSessionService {
         }
         return raw.flatMap { CreateJSON.decode(CreationOptions.self, $0) }
       },
+      cachedRoles: { userId, workspaceId in
+        guard WorkspaceModePins.shared.mode(workspaceId) == .plaintext else { return nil }
+        let key = rolesKey(userId: userId, workspaceId: workspaceId)
+        let raw: String? = await withCheckedContinuation { continuation in
+          LocalStore.queue.async { continuation.resume(returning: (try? LocalStore.shared.read(key)) ?? nil) }
+        }
+        return raw.flatMap { CreateJSON.decode([RuntimeContract.AgentRoleItem].self, $0) }
+      },
       roles: { workspaceId in
-        guard !LodyUIVerify.enabled, let runtime = DataRuntime.current, runtime.workspace == workspaceId else { return [] }
-        return try await runtime.workspaceCall(RuntimeContract.Calls.AgentRoles.self) { workspace, userId in
+        guard !LodyUIVerify.enabled else { return [] }
+        guard let runtime = DataRuntime.current, runtime.workspace == workspaceId else {
+          throw DataRuntime.failure("not_ready", String(localized: "native.runtime.sessionNotSynced", bundle: .lody))
+        }
+        let cacheKey = rolesKey(userId: runtime.userId, workspaceId: workspaceId)
+        let generation = LocalStore.shared.generation
+        let roles = try await runtime.workspaceCall(RuntimeContract.Calls.AgentRoles.self) { workspace, userId in
           .list(.init(workspaceId: workspace, userId: userId))
         }.roles
+        if WorkspaceModePins.shared.mode(workspaceId) == .plaintext {
+          let value = CreateJSON.encode(roles)
+          if value.utf8.count <= 1024 * 1024 {
+            LocalStore.queue.async { try? LocalStore.shared.write(cacheKey, value, generation: generation) }
+          }
+        }
+        return roles
       },
       projectGroups: { workspaceId in
         guard !LodyUIVerify.enabled, let runtime = DataRuntime.current, runtime.workspace == workspaceId else { return [] }

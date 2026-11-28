@@ -185,9 +185,9 @@ extension DataRuntime {
       if let value = args[key] { inject[key] = ["value": value] }
     }
     let text = args["text"] as? String ?? ""
-    // Catalog expansion precedes the durable send and has its own bounded read.
-    let expands = text.contains("$") || text.contains("@session:") || text.contains("@role:")
-    turnCall(RuntimeContract.Calls.SendTurn.self, payload, inject: inject, sink: sink, task: task, timeout: expands ? 90 : nil)
+    // Catalog/shortcut expansion precedes the durable send and has its own bounded read.
+    let expands = text.contains("$") || text.contains("@session:") || text.contains("@role:") || text.contains("/shortcut:")
+    turnCall(RuntimeContract.Calls.SendTurn.self, payload, inject: inject, sink: sink, task: task, timeout: expands ? 120 : nil)
   }
   private func turnCall<C: RuntimeCall>(_ call: C.Type, _ payload: String, inject: [String: Any], sink: ReplySink,
     task: String?, timeout: Double? = nil) where C.Params: Decodable, C.Result: Encodable {
